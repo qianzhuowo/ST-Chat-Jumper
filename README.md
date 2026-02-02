@@ -4,11 +4,7 @@
 
 ## 功能
 
-<center>
-<video width="80%" controls loop>
-  <source src="https://stcard.pages.dev/examplepic/jump示例视频.mp4" type="video/mp4">
-</video>
-</center>
+<video src="https://github.com/user-attachments/assets/04cab1ea-01f4-4179-a2bd-625b945f051a.mp4" controls="controls" width="80%" loop></video>
 
 - 快速跳转到**最近 3 楼**：按钮 `1 / 2 / 3`
   - `1` = 最新楼
