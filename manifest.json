@@ -1,0 +1,10 @@
+{
+  "name": "ST Chat Jumper",
+  "display_name": "快捷楼层跳转 ST Chat Jumper",
+  "version": "1.0.0",
+  "author": "Qianzhuo",
+  "description": "悬浮跳转条：最近3楼/上一楼/下一楼，以及当前楼层头/尾对齐；支持按钮切换横/竖布局与相对位置记忆。",
+  "js": "index.js",
+  "css": "style.css",
+  "loading_order": 50
+}

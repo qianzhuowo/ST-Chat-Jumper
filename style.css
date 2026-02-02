@@ -1,0 +1,174 @@
+/* ST Chat Jumper */
+
+#stcj-root.stcj-root {
+  position: fixed;
+  z-index: 999999;
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+
+  background: rgba(25, 25, 25, 0.72);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  /* 允许拖拽，不触发页面滚动 */
+}
+
+#stcj-root .stcj-handle {
+  width: 12px;
+  height: 34px;
+  align-self: center;
+
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+
+  cursor: grab;
+}
+
+#stcj-root.stcj-vertical .stcj-handle {
+  width: 34px;
+  height: 12px;
+}
+
+#stcj-root .stcj-handle:active {
+  cursor: grabbing;
+}
+
+#stcj-root .stcj-handle::before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, 0.55) 0 2px,
+      rgba(255, 255, 255, 0) 2px 4px);
+  opacity: 0.35;
+}
+
+#stcj-root.stcj-vertical .stcj-handle::before {
+  background: repeating-linear-gradient(0deg,
+      rgba(255, 255, 255, 0.55) 0 2px,
+      rgba(255, 255, 255, 0) 2px 4px);
+}
+
+#stcj-root .stcj-handle:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+#stcj-root.stcj-horizontal {
+  flex-direction: row;
+}
+
+#stcj-root.stcj-vertical {
+  flex-direction: column;
+}
+
+#stcj-root .stcj-btn {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(45, 45, 45, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+
+  cursor: pointer;
+}
+
+/* 小按钮（收起/展开） */
+#stcj-root .stcj-btn.stcj-mini {
+  width: 22px;
+  height: 22px;
+  font-size: 16px;
+  font-weight: 900;
+  border-radius: 7px;
+  opacity: 0.92;
+}
+
+/* 让收起按钮在横向布局时垂直居中（与拖拽手柄、其它按钮对齐） */
+#stcj-root.stcj-horizontal .stcj-btn.stcj-collapse {
+  align-self: center;
+}
+
+/* 让收起按钮在竖向布局时水平居中 */
+#stcj-root.stcj-vertical .stcj-btn.stcj-collapse {
+  justify-self: center;
+}
+
+/* 收起状态：隐藏除“收起按钮”以外的所有功能按钮 */
+#stcj-root.stcj-collapsed .stcj-btn:not(.stcj-collapse) {
+  display: none;
+}
+
+#stcj-root .stcj-btn.stcj-toggle {
+  font-weight: 900;
+  opacity: 0.9;
+}
+
+#stcj-root .stcj-btn {
+  position: relative;
+}
+
+#stcj-root .stcj-btn:active {
+  transform: scale(0.96);
+}
+
+#stcj-root .stcj-btn:hover {
+  background: rgba(70, 70, 70, 0.9);
+}
+
+/* 跳转后闪烁定位 */
+#chat .mes.stcj-flash {
+  outline: 2px solid rgba(80, 200, 120, 0.85);
+  outline-offset: 2px;
+  border-radius: 10px;
+  animation: stcjFlash 0.9s ease-in-out 1;
+}
+
+@keyframes stcjFlash {
+  0% {
+    outline-color: rgba(80, 200, 120, 0.95);
+  }
+
+  50% {
+    outline-color: rgba(80, 200, 120, 0.2);
+  }
+
+  100% {
+    outline-color: rgba(80, 200, 120, 0.85);
+  }
+}
+
+@media (max-width: 768px) {
+  #stcj-root .stcj-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 15px;
+  }
+
+  #stcj-root .stcj-btn.stcj-mini {
+    width: 26px;
+    height: 26px;
+    font-size: 18px;
+  }
+
+  #stcj-root.stcj-horizontal .stcj-handle {
+    height: 40px;
+  }
+
+  #stcj-root.stcj-vertical .stcj-handle {
+    width: 40px;
+  }
+}
