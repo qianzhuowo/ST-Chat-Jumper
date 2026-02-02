@@ -4,6 +4,12 @@
 
 ## 功能
 
+<center>
+<video width="80%" controls loop>
+  <source src="https://stcard.pages.dev/examplepic/jump示例视频.mp4" type="video/mp4">
+</video>
+</center>
+
 - 快速跳转到**最近 3 楼**：按钮 `1 / 2 / 3`
   - `1` = 最新楼
   - `2` = 倒数第 2 楼
