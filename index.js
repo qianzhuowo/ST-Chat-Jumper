@@ -357,6 +357,11 @@
         togglePinMode();
         return;
 
+      // 收藏列表：展开/收起
+      case 'toggleFavPanel':
+        setFavPanelOpen(!favPanelOpen);
+        return;
+
       // 上一楼/下一楼：跳到“头部”
       case 'prev': {
         const anchor = getAnchorMesId();
@@ -410,6 +415,14 @@
     next.textContent = isVertical ? '↓' : '>';
   }
 
+  function updateFavPanelToggleButton(root) {
+    const btn = root.querySelector('.stcj-btn[data-action="toggleFavPanel"]');
+    if (!btn) return;
+
+    btn.textContent = favPanelOpen ? '▾' : '▸';
+    btn.title = favPanelOpen ? '收起收藏列表' : '展开收藏列表';
+  }
+
   function formatFloorLabel(mesId) {
     // SillyTavern 的楼层/mesid 从 0 开始
     return `第 ${mesId} 楼`;
@@ -421,6 +434,7 @@
     const root = document.getElementById(ROOT_ID);
     if (root) {
       root.classList.toggle('stcj-fav-open', favPanelOpen);
+      updateFavPanelToggleButton(root);
       updateFavoritesUI(root);
     }
 
@@ -581,30 +595,10 @@
   }
 
   function bindRootOutsideClose(root) {
-    const onDocPointerUp = (e) => {
-      try {
-        if (!favPanelOpen) return;
-        if (pinMode) return;
-        if (isDragging) return;
-        if (settings.collapsed) return;
-
-        // 点在插件内部则不关闭
-        if (root.contains(e.target)) return;
-
-        closeFavPanel();
-      } catch {
-        /* ignore */
-      }
-    };
-
-    document.addEventListener('pointerup', onDocPointerUp, true);
-
+    // 取消“点击外部自动关闭收藏列表”的行为（用户反馈不方便）。
+    // 保留函数结构，避免旧逻辑调用时报错；返回空清理函数。
     return () => {
-      try {
-        document.removeEventListener('pointerup', onDocPointerUp, true);
-      } catch {
-        /* ignore */
-      }
+      /* noop */
     };
   }
 
@@ -1107,7 +1101,11 @@
       <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）">&gt;</div>
       <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">H</div>
       <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">L</div>
-      <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏（仅本页临时）">📌</div>
+
+      <div class="stcj-pin-group">
+        <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏（仅本页临时）">📌</div>
+        <div class="stcj-btn stcj-pin-arrow" data-action="toggleFavPanel" title="展开收藏列表">▸</div>
+      </div>
 
       <div class="stcj-fav-panel" aria-hidden="true">
         <div class="stcj-fav-header">
@@ -1128,6 +1126,7 @@
     updateOrientationToggleButton(root);
     updateCollapseToggleButton(root);
     updatePrevNextButtons(root);
+    updateFavPanelToggleButton(root);
     updateFavoritesUI(root);
 
     // 初始位置

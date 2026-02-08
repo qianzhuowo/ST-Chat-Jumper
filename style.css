@@ -113,6 +113,59 @@
   position: relative;
 }
 
+/* 图钉 + 展开箭头组合 */
+#stcj-root .stcj-pin-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 横向：箭头在图钉右侧（不占太多长度） */
+#stcj-root.stcj-horizontal .stcj-pin-group {
+  flex-direction: row;
+}
+
+/* 竖向：箭头在图钉下方（避免竖向栏变得过宽） */
+#stcj-root.stcj-vertical .stcj-pin-group {
+  flex-direction: column;
+}
+
+#stcj-root .stcj-btn.stcj-pin-arrow {
+  font-size: 14px;
+  font-weight: 900;
+  opacity: 0.92;
+  border-radius: 10px;
+}
+
+#stcj-root.stcj-horizontal .stcj-btn.stcj-pin-arrow {
+  width: 22px;
+  height: 34px;
+}
+
+#stcj-root.stcj-vertical .stcj-btn.stcj-pin-arrow {
+  width: 34px;
+  height: 22px;
+}
+
+@media (max-width: 768px) {
+  #stcj-root.stcj-horizontal .stcj-btn.stcj-pin-arrow {
+    width: 26px;
+    height: 40px;
+    font-size: 16px;
+  }
+
+  #stcj-root.stcj-vertical .stcj-btn.stcj-pin-arrow {
+    width: 40px;
+    height: 26px;
+    font-size: 16px;
+  }
+}
+
+/* 收起时隐藏整个图钉组，避免留下空白间距 */
+#stcj-root.stcj-collapsed .stcj-pin-group {
+  display: none;
+}
+
 #stcj-root .stcj-btn.stcj-pin.stcj-pin-active {
   outline: 2px solid rgba(255, 77, 79, 0.7);
   outline-offset: 1px;
