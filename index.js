@@ -12,6 +12,7 @@
   const PLUGIN_NS = 'stcj';
   const ROOT_ID = 'stcj-root';
   const STORAGE_KEY = 'st_chat_jumper_settings_v1';
+  const BODY_PIN_MODE_CLASS = 'stcj-pin-mode';
 
   /** @type {'horizontal'|'vertical'} */
   const DEFAULT_ORIENTATION = 'vertical';
@@ -38,6 +39,26 @@
   let dragPointerId = null;
   let dragStart = { x: 0, y: 0, left: 0, top: 0 };
   let resizeRaf = null;
+
+  // ===== 收藏（仅当前页面，不持久化） =====
+  /** @type {number[]} */
+  let favoriteMesIds = [];
+  let favPanelOpen = false;
+  let pinMode = false;
+
+  let suppressNextChatClick = false;
+
+  let pinDown = null;
+  let pinListenersAttached = false;
+
+  /** @type {null|(() => void)} */
+  let detachChatListeners = null;
+  /** @type {null|(() => void)} */
+  let detachOutsideClose = null;
+  let chatWatchInterval = null;
+  let lastChatKey = null;
+  let lastChatRef = null;
+  let lastChatLen = null;
 
   function log(...args) {
     // eslint-disable-next-line no-console
@@ -331,6 +352,11 @@
         toggleOrientation();
         return;
 
+      // 收藏：打开面板并进入点选
+      case 'togglePin':
+        togglePinMode();
+        return;
+
       // 上一楼/下一楼：跳到“头部”
       case 'prev': {
         const anchor = getAnchorMesId();
@@ -372,6 +398,452 @@
     const collapsed = !!settings.collapsed;
     btn.textContent = collapsed ? '+' : '–';
     btn.title = collapsed ? '展开跳转栏' : '收起跳转栏';
+  }
+
+  function updatePrevNextButtons(root) {
+    const prev = root.querySelector('.stcj-btn[data-action="prev"]');
+    const next = root.querySelector('.stcj-btn[data-action="next"]');
+    if (!prev || !next) return;
+
+    const isVertical = settings.orientation === 'vertical';
+    prev.textContent = isVertical ? '↑' : '<';
+    next.textContent = isVertical ? '↓' : '>';
+  }
+
+  function formatFloorLabel(mesId) {
+    // SillyTavern 的楼层/mesid 从 0 开始
+    return `第 ${mesId} 楼`;
+  }
+
+  function setFavPanelOpen(open) {
+    favPanelOpen = !!open;
+
+    const root = document.getElementById(ROOT_ID);
+    if (root) {
+      root.classList.toggle('stcj-fav-open', favPanelOpen);
+      updateFavoritesUI(root);
+    }
+
+    // 关闭面板时一并退出点选模式
+    if (!favPanelOpen) setPinMode(false);
+  }
+
+  function setPinMode(on) {
+    pinMode = !!on;
+
+    try {
+      document.body.classList.toggle(BODY_PIN_MODE_CLASS, pinMode);
+    } catch {
+      /* ignore */
+    }
+
+    const root = document.getElementById(ROOT_ID);
+    if (root) {
+      const pinBtn = root.querySelector('.stcj-btn.stcj-pin');
+      pinBtn?.classList.toggle('stcj-pin-active', pinMode);
+      updateFavoritesUI(root);
+    }
+
+    if (pinMode) attachPinPickListeners();
+    else detachPinPickListeners();
+  }
+
+  function togglePinMode() {
+    // 第一次点：打开面板并进入点选
+    if (!favPanelOpen) setFavPanelOpen(true);
+
+    setPinMode(!pinMode);
+
+    if (pinMode) toastInfo('点选收藏：请点击要收藏的楼层（按 ESC 退出）');
+  }
+
+  function closeFavPanel() {
+    setPinMode(false);
+    setFavPanelOpen(false);
+  }
+
+  function hasFavorite(mesId) {
+    return favoriteMesIds.includes(mesId);
+  }
+
+  function addFavorite(mesId) {
+    if (hasFavorite(mesId)) return false;
+    favoriteMesIds.push(mesId);
+    favoriteMesIds.sort((a, b) => a - b);
+    return true;
+  }
+
+  function removeFavorite(mesId) {
+    const idx = favoriteMesIds.indexOf(mesId);
+    if (idx < 0) return false;
+    favoriteMesIds.splice(idx, 1);
+    return true;
+  }
+
+  function toggleFavorite(mesId) {
+    if (hasFavorite(mesId)) {
+      removeFavorite(mesId);
+      return false;
+    }
+
+    addFavorite(mesId);
+    return true;
+  }
+
+  function updateFavoritesUI(root) {
+    const pinBtn = root.querySelector('.stcj-btn.stcj-pin');
+    if (pinBtn) pinBtn.setAttribute('data-count', String(favoriteMesIds.length));
+
+    root.classList.toggle('stcj-fav-open', favPanelOpen);
+
+    const hint = root.querySelector('.stcj-fav-hint');
+    if (hint) {
+      hint.textContent = pinMode
+        ? '点选楼层收藏：点击聊天中的目标楼层（ESC 退出点选）'
+        : '点击 📌 进入点选收藏；点击条目可跳转到该楼层顶部';
+    }
+
+    const list = root.querySelector('.stcj-fav-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!favoriteMesIds.length) {
+      const empty = document.createElement('div');
+      empty.className = 'stcj-fav-empty';
+      empty.textContent = '暂无收藏（仅本页临时有效）';
+      list.appendChild(empty);
+      return;
+    }
+
+    favoriteMesIds.forEach((mesId) => {
+      const item = document.createElement('div');
+      item.className = 'stcj-fav-item';
+      item.setAttribute('data-mesid', String(mesId));
+      item.title = `mesid=${mesId}`;
+
+      const floor = document.createElement('div');
+      floor.className = 'stcj-fav-floor';
+      floor.textContent = formatFloorLabel(mesId);
+
+      const remove = document.createElement('div');
+      remove.className = 'stcj-fav-remove';
+      remove.title = '移除';
+      remove.textContent = '×';
+
+      item.appendChild(floor);
+      item.appendChild(remove);
+      list.appendChild(item);
+    });
+  }
+
+  function bindFavoritesPanel(root) {
+    const panel = root.querySelector('.stcj-fav-panel');
+    if (!panel) return;
+
+    // 禁止长按/右键菜单
+    panel.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    const closeBtn = panel.querySelector('.stcj-fav-close');
+    closeBtn?.addEventListener('pointerup', (e) => {
+      if (isDragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeFavPanel();
+    });
+
+    panel.addEventListener('pointerup', async (e) => {
+      if (isDragging) return;
+
+      const removeBtn = e.target?.closest?.('.stcj-fav-remove');
+      if (removeBtn) {
+        const item = removeBtn.closest('.stcj-fav-item');
+        const mesId = parseInt(item?.getAttribute('data-mesid') || '', 10);
+        if (!Number.isNaN(mesId)) {
+          removeFavorite(mesId);
+          updateFavoritesUI(root);
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      const item = e.target?.closest?.('.stcj-fav-item');
+      if (!item) return;
+
+      const mesId = parseInt(item.getAttribute('data-mesid') || '', 10);
+      if (Number.isNaN(mesId)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      await jumpToMessage(mesId, 'start');
+    });
+  }
+
+  function bindRootOutsideClose(root) {
+    const onDocPointerUp = (e) => {
+      try {
+        if (!favPanelOpen) return;
+        if (pinMode) return;
+        if (isDragging) return;
+        if (settings.collapsed) return;
+
+        // 点在插件内部则不关闭
+        if (root.contains(e.target)) return;
+
+        closeFavPanel();
+      } catch {
+        /* ignore */
+      }
+    };
+
+    document.addEventListener('pointerup', onDocPointerUp, true);
+
+    return () => {
+      try {
+        document.removeEventListener('pointerup', onDocPointerUp, true);
+      } catch {
+        /* ignore */
+      }
+    };
+  }
+
+  function onPinPointerDown(e) {
+    if (!pinMode) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pinDown = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+  }
+
+  function onPinPointerUp(e) {
+    if (!pinMode) return;
+
+    if (pinDown && pinDown.pointerId !== e.pointerId) return;
+    const down = pinDown;
+    pinDown = null;
+    if (!down) return;
+
+    const dx = e.clientX - down.x;
+    const dy = e.clientY - down.y;
+    const CLICK_THRESHOLD = 8;
+    if (Math.hypot(dx, dy) > CLICK_THRESHOLD) return; // 认为是拖拽/滚动
+
+    const root = document.getElementById(ROOT_ID);
+    if (root && root.contains(e.target)) return; // 点在插件自身上
+
+    const mesEl = e.target?.closest?.('#chat .mes[mesid]');
+    if (!mesEl) return;
+
+    const mesId = parseInt(mesEl.getAttribute('mesid') || '', 10);
+    if (Number.isNaN(mesId)) return;
+
+    // 在点选模式下，拦截点击，避免触发酒馆自身的消息交互
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+
+    const added = toggleFavorite(mesId);
+    if (root) updateFavoritesUI(root);
+
+    if (added) toastSuccess(`已收藏：${formatFloorLabel(mesId)}`);
+    else toastInfo(`已取消收藏：${formatFloorLabel(mesId)}`);
+
+    // 阻止本次点击（click 事件）继续触发酒馆自身逻辑
+    suppressNextChatClick = true;
+    setTimeout(() => {
+      suppressNextChatClick = false;
+    }, 400);
+
+    // 一次点选后自动退出点选模式，但保留收藏面板
+    setPinMode(false);
+  }
+
+  function onPinClickCapture(e) {
+    const mesEl = e.target?.closest?.('#chat .mes[mesid]');
+    if (!mesEl) return;
+
+    const root = document.getElementById(ROOT_ID);
+    if (root && root.contains(e.target)) return;
+
+    if (!pinMode && !suppressNextChatClick) return;
+
+    suppressNextChatClick = false;
+
+    // 捕获阶段拦截 click，避免触发消息选择/菜单等行为
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+  }
+
+  function onPinKeyDown(e) {
+    if (!pinMode) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setPinMode(false);
+    }
+  }
+
+  function attachPinPickListeners() {
+    if (pinListenersAttached) return;
+    pinListenersAttached = true;
+    document.addEventListener('pointerdown', onPinPointerDown, true);
+    document.addEventListener('pointerup', onPinPointerUp, true);
+    document.addEventListener('click', onPinClickCapture, true);
+    document.addEventListener('keydown', onPinKeyDown, true);
+  }
+
+  function detachPinPickListeners() {
+    if (!pinListenersAttached) return;
+    pinListenersAttached = false;
+    document.removeEventListener('pointerdown', onPinPointerDown, true);
+    document.removeEventListener('pointerup', onPinPointerUp, true);
+    document.removeEventListener('click', onPinClickCapture, true);
+    document.removeEventListener('keydown', onPinKeyDown, true);
+  }
+
+  function getChatKey() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx) return null;
+
+      const parts = [];
+
+      const groupId = ctx.groupId ?? ctx.group_id ?? ctx.group?.id;
+      const charId = ctx.characterId ?? ctx.character_id ?? ctx.character?.id;
+      const chatId =
+        ctx.chatId ??
+        ctx.chat_id ??
+        ctx.activeChatId ??
+        ctx.active_chat_id ??
+        ctx.chatName ??
+        ctx.chat_name ??
+        ctx.chatFileName ??
+        ctx.chat_file_name ??
+        ctx.chatFile ??
+        ctx.chat_file;
+
+      if (groupId != null) parts.push(`group:${groupId}`);
+      if (charId != null) parts.push(`char:${charId}`);
+      if (chatId != null) parts.push(`chat:${chatId}`);
+
+      return parts.length ? parts.join('|') : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resetTempFavorites(reason) {
+    const hadAny = favoriteMesIds.length > 0;
+
+    favoriteMesIds = [];
+    setPinMode(false);
+    setFavPanelOpen(false);
+
+    const root = document.getElementById(ROOT_ID);
+    if (root) updateFavoritesUI(root);
+
+    if (hadAny) toastInfo(`聊天已切换：临时收藏已清空${reason ? `（${reason}）` : ''}`);
+  }
+
+  function attachChatChangeListeners() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      const es = ctx?.eventSource;
+      const et = ctx?.event_types;
+      if (!es || !et) return null;
+
+      const handler = () => resetTempFavorites('event');
+
+      const keys = [
+        'CHAT_CHANGED',
+        'CHAT_LOADED',
+        'CHAT_SELECTED',
+        'OPEN_CHAT',
+        'SWITCH_CHAT',
+        'CHARACTER_CHANGED',
+        'CHARACTER_SELECTED',
+        'GROUP_CHANGED',
+        'GROUP_SELECTED',
+      ];
+
+      const events = keys.map((k) => et[k]).filter(Boolean);
+      const uniq = [...new Set(events)];
+      uniq.forEach((ev) => es.on?.(ev, handler));
+
+      return () => {
+        try {
+          uniq.forEach((ev) => es.removeListener?.(ev, handler));
+        } catch {
+          /* ignore */
+        }
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function startChatWatch() {
+    if (chatWatchInterval) return;
+
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      lastChatKey = getChatKey();
+      lastChatRef = ctx?.chat || null;
+      lastChatLen = Array.isArray(ctx?.chat) ? ctx.chat.length : null;
+    } catch {
+      lastChatKey = null;
+      lastChatRef = null;
+      lastChatLen = null;
+    }
+
+    chatWatchInterval = setInterval(() => {
+      try {
+        const ctx = window.SillyTavern?.getContext?.();
+        if (!ctx) return;
+
+        const key = getChatKey();
+        const ref = ctx.chat || null;
+        const len = Array.isArray(ctx.chat) ? ctx.chat.length : null;
+
+        // 1) 有 chatKey 时优先用 key 判断
+        if (key && lastChatKey && key !== lastChatKey) {
+          lastChatKey = key;
+          lastChatRef = ref;
+          lastChatLen = len;
+          resetTempFavorites('key');
+          return;
+        }
+        if (!lastChatKey && key) lastChatKey = key;
+
+        // 2) 尝试用 chat 数组引用变化判断
+        if (ref && lastChatRef && ref !== lastChatRef) {
+          lastChatKey = key || lastChatKey;
+          lastChatRef = ref;
+          lastChatLen = len;
+          resetTempFavorites('ref');
+          return;
+        }
+        if (!lastChatRef && ref) lastChatRef = ref;
+
+        // 3) 兜底：切换聊天时常会先清空 chat
+        if (
+          typeof len === 'number' &&
+          typeof lastChatLen === 'number' &&
+          len === 0 &&
+          lastChatLen > 0 &&
+          favoriteMesIds.length
+        ) {
+          lastChatKey = key || lastChatKey;
+          lastChatRef = ref || lastChatRef;
+          lastChatLen = len;
+          resetTempFavorites('len');
+          return;
+        }
+
+        lastChatLen = len;
+      } catch {
+        /* ignore */
+      }
+    }, 1000);
   }
 
   function getRootMaxOffsets(root) {
@@ -469,6 +941,7 @@
     root.classList.toggle('stcj-vertical', orientation === 'vertical');
 
     updateOrientationToggleButton(root);
+    updatePrevNextButtons(root);
 
     // 切换后尺寸可能变化：按相对位置重新摆放并 clamp
     if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
@@ -492,13 +965,15 @@
     const root = document.getElementById(ROOT_ID);
     if (!root) return;
 
-    // 重要：收起/展开时保持按钮栏的“屏幕位置”不跳动。
-    // 之前按 rx/ry 重新计算 left/top，会因为组件尺寸变化导致位置漂移（看起来像跳到中间）。
+    // 收起/展开时保持按钮栏的“屏幕位置”不跳动
     const left = parseFloat(root.style.left || '0') || 0;
     const top = parseFloat(root.style.top || '0') || 0;
 
     root.classList.toggle('stcj-collapsed', settings.collapsed);
     updateCollapseToggleButton(root);
+
+    // 收起时关闭收藏面板/点选模式
+    if (settings.collapsed) closeFavPanel();
 
     // 用原 left/top 重新落位，仅在越界时做 clamp
     persistRootPosition(root, left, top);
@@ -632,6 +1107,16 @@
       <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）">&gt;</div>
       <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">H</div>
       <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">L</div>
+      <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏（仅本页临时）">📌</div>
+
+      <div class="stcj-fav-panel" aria-hidden="true">
+        <div class="stcj-fav-header">
+          <div class="stcj-fav-title">收藏</div>
+          <div class="stcj-fav-close" title="关闭">×</div>
+        </div>
+        <div class="stcj-fav-hint"></div>
+        <div class="stcj-fav-list"></div>
+      </div>
     `;
 
     document.body.appendChild(root);
@@ -642,12 +1127,20 @@
     root.classList.toggle('stcj-collapsed', !!settings.collapsed);
     updateOrientationToggleButton(root);
     updateCollapseToggleButton(root);
+    updatePrevNextButtons(root);
+    updateFavoritesUI(root);
 
     // 初始位置
     applyRootPositionFromSettings(root);
 
     attachDrag(root);
     bindButtons(root);
+    bindFavoritesPanel(root);
+    detachOutsideClose = bindRootOutsideClose(root);
+
+    // 监听聊天切换，确保“临时收藏”不跨聊天文件
+    detachChatListeners = attachChatChangeListeners();
+    startChatWatch();
 
     // 窗口尺寸变化时，保持相对位置（并保证不跑出屏幕）
     const onResize = () => scheduleRepositionOnResize(root);
@@ -657,6 +1150,35 @@
     window[`${PLUGIN_NS}Cleanup`] = () => {
       try {
         window.removeEventListener('resize', onResize);
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        detachChatListeners?.();
+        detachChatListeners = null;
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        detachOutsideClose?.();
+        detachOutsideClose = null;
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        if (chatWatchInterval) {
+          clearInterval(chatWatchInterval);
+          chatWatchInterval = null;
+        }
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        detachPinPickListeners();
       } catch {
         /* ignore */
       }

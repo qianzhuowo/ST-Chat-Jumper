@@ -4,6 +4,7 @@
   position: fixed;
   z-index: 999999;
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 6px;
 
@@ -104,7 +105,182 @@
 
 /* 让收起按钮在竖向布局时水平居中 */
 #stcj-root.stcj-vertical .stcj-btn.stcj-collapse {
-  justify-self: center;
+  align-self: center;
+}
+
+/* 收藏（📌）按钮：角标计数 */
+#stcj-root .stcj-btn.stcj-pin {
+  position: relative;
+}
+
+#stcj-root .stcj-btn.stcj-pin.stcj-pin-active {
+  outline: 2px solid rgba(255, 77, 79, 0.7);
+  outline-offset: 1px;
+}
+
+#stcj-root .stcj-btn.stcj-pin[data-count]:not([data-count="0"])::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+
+  color: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 77, 79, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* 收藏悬浮列表 */
+#stcj-root .stcj-fav-panel {
+  position: absolute;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+
+  min-width: 140px;
+  max-width: 260px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 8px;
+
+  background: rgba(25, 25, 25, 0.88);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+
+  touch-action: pan-y;
+}
+
+#stcj-root.stcj-fav-open .stcj-fav-panel {
+  display: flex;
+}
+
+/* 竖向：默认把列表放到按钮栏左侧 */
+#stcj-root.stcj-vertical .stcj-fav-panel {
+  top: 0;
+  right: calc(100% + 8px);
+}
+
+/* 横向：默认把列表放到按钮栏下方 */
+#stcj-root.stcj-horizontal .stcj-fav-panel {
+  left: 0;
+  top: calc(100% + 8px);
+}
+
+#stcj-root.stcj-collapsed .stcj-fav-panel {
+  display: none !important;
+}
+
+#stcj-root .stcj-fav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#stcj-root .stcj-fav-title {
+  font-size: 13px;
+  font-weight: 900;
+  opacity: 0.92;
+}
+
+#stcj-root .stcj-fav-close {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(45, 45, 45, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#stcj-root .stcj-fav-close:hover {
+  background: rgba(70, 70, 70, 0.9);
+}
+
+#stcj-root .stcj-fav-hint {
+  font-size: 12px;
+  opacity: 0.74;
+  line-height: 1.2;
+}
+
+#stcj-root .stcj-fav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#stcj-root .stcj-fav-empty {
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 6px 4px;
+}
+
+#stcj-root .stcj-fav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+
+  background: rgba(45, 45, 45, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+}
+
+#stcj-root .stcj-fav-item:hover {
+  background: rgba(70, 70, 70, 0.9);
+}
+
+#stcj-root .stcj-fav-item:active {
+  transform: scale(0.98);
+}
+
+#stcj-root .stcj-fav-floor {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+#stcj-root .stcj-fav-remove {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  font-weight: 900;
+  opacity: 0.8;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(25, 25, 25, 0.55);
+}
+
+#stcj-root .stcj-fav-remove:hover {
+  opacity: 1;
+  background: rgba(255, 77, 79, 0.22);
+  border-color: rgba(255, 77, 79, 0.35);
+}
+
+/* 收藏点选模式：鼠标图钉光标 + hover 高亮 */
+body.stcj-pin-mode #chat,
+body.stcj-pin-mode #chat * {
+  cursor: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cGF0aCBmaWxsPSIjZmY0ZDRmIiBkPSJNMTYgMmMtMy4zIDAtNiAyLjctNiA2IDAgMi4yIDEuMiA0LjEgMyA1LjFWMThsLTMgNHYyaDEydi0ybC0zLTR2LTQuOWMxLjgtMSAzLTMgMy01LjEgMC0zLjMtMi43LTYtNi02eiIvPjxwYXRoIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIGQ9Ik0xNiAyNHY2Ii8+PGNpcmNsZSBjeD0iMTYiIGN5PSIzMCIgcj0iMS4yIiBmaWxsPSIjZmZmZmZmIi8+PC9zdmc+') 16 30, auto !important;
+}
+
+body.stcj-pin-mode #chat .mes[mesid]:hover {
+  outline: 2px dashed rgba(255, 77, 79, 0.72);
+  outline-offset: 2px;
+  border-radius: 10px;
 }
 
 /* 收起状态：隐藏除“收起按钮”以外的所有功能按钮 */
