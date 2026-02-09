@@ -5,61 +5,47 @@
   z-index: 999999;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px;
+  gap: 1px;
+  padding: 2px;
 
-  background: rgba(25, 25, 25, 0.72);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  background: rgba(30, 30, 30, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
-  /* 允许拖拽，不触发页面滚动 */
+  transition: opacity 0.2s;
 }
 
 #stcj-root .stcj-handle {
-  width: 12px;
-  height: 34px;
+  width: 8px;
+  height: 24px;
   align-self: center;
+  margin: 0 2px;
 
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.2);
   cursor: grab;
+  transition: background 0.2s;
 }
 
 #stcj-root.stcj-vertical .stcj-handle {
-  width: 34px;
-  height: 12px;
+  width: 24px;
+  height: 8px;
+  margin: 2px 0;
 }
 
 #stcj-root .stcj-handle:active {
   cursor: grabbing;
-}
-
-#stcj-root .stcj-handle::before {
-  content: '';
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  background: repeating-linear-gradient(90deg,
-      rgba(255, 255, 255, 0.55) 0 2px,
-      rgba(255, 255, 255, 0) 2px 4px);
-  opacity: 0.35;
-}
-
-#stcj-root.stcj-vertical .stcj-handle::before {
-  background: repeating-linear-gradient(0deg,
-      rgba(255, 255, 255, 0.55) 0 2px,
-      rgba(255, 255, 255, 0) 2px 4px);
+  background: rgba(255, 255, 255, 0.4);
 }
 
 #stcj-root .stcj-handle:hover {
-  background: rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.35);
 }
 
 #stcj-root.stcj-horizontal {
@@ -70,164 +56,236 @@
   flex-direction: column;
 }
 
+#stcj-root .stcj-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  display: block;
+  opacity: 0.9;
+}
+
 #stcj-root .stcj-btn {
   width: 34px;
   height: 34px;
   display: grid;
   place-items: center;
 
-  font-weight: 700;
-  font-size: 14px;
-  line-height: 1;
-
-  color: rgba(255, 255, 255, 0.92);
-  background: rgba(45, 45, 45, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 10px;
 
   cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 /* 小按钮（收起/展开） */
 #stcj-root .stcj-btn.stcj-mini {
-  width: 22px;
-  height: 22px;
-  font-size: 16px;
-  font-weight: 900;
-  border-radius: 7px;
-  opacity: 0.92;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
 }
 
-/* 让收起按钮在横向布局时垂直居中（与拖拽手柄、其它按钮对齐） */
+#stcj-root .stcj-btn.stcj-mini svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.5;
+}
+
+/* 布局对齐 */
 #stcj-root.stcj-horizontal .stcj-btn.stcj-collapse {
   align-self: center;
 }
 
-/* 让收起按钮在竖向布局时水平居中 */
 #stcj-root.stcj-vertical .stcj-btn.stcj-collapse {
   align-self: center;
 }
 
-/* 收藏（📌）按钮：角标计数 */
-#stcj-root .stcj-btn.stcj-pin {
-  position: relative;
-}
-
-/* 图钉 + 展开箭头组合 */
+/* 收藏图钉组 */
 #stcj-root .stcj-pin-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  padding: 2px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
 }
 
-/* 横向：箭头在图钉右侧（不占太多长度） */
 #stcj-root.stcj-horizontal .stcj-pin-group {
   flex-direction: row;
 }
 
-/* 竖向：箭头在图钉下方（避免竖向栏变得过宽） */
 #stcj-root.stcj-vertical .stcj-pin-group {
   flex-direction: column;
 }
 
-#stcj-root .stcj-btn.stcj-pin-arrow {
-  font-size: 14px;
-  font-weight: 900;
-  opacity: 0.92;
-  border-radius: 10px;
+#stcj-root .stcj-btn.stcj-pin {
+  background: transparent;
+  border-color: transparent;
+  position: relative;
 }
 
-#stcj-root.stcj-horizontal .stcj-btn.stcj-pin-arrow {
-  width: 22px;
-  height: 34px;
+#stcj-root .stcj-btn.stcj-pin-arrow {
+  width: 20px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
 }
 
 #stcj-root.stcj-vertical .stcj-btn.stcj-pin-arrow {
-  width: 34px;
-  height: 22px;
+  width: 36px;
+  height: 20px;
+}
+
+#stcj-root .stcj-btn.stcj-pin-arrow svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.7;
 }
 
 @media (max-width: 768px) {
   #stcj-root.stcj-horizontal .stcj-btn.stcj-pin-arrow {
-    width: 26px;
+    width: 28px;
     height: 40px;
-    font-size: 16px;
   }
 
   #stcj-root.stcj-vertical .stcj-btn.stcj-pin-arrow {
     width: 40px;
-    height: 26px;
-    font-size: 16px;
+    height: 28px;
   }
 }
 
-/* 收起时隐藏整个图钉组，避免留下空白间距 */
+/* 收起状态 */
 #stcj-root.stcj-collapsed .stcj-pin-group {
   display: none;
 }
 
+/* 交互状态 */
+#stcj-root .stcj-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+#stcj-root .stcj-btn:active {
+  transform: translateY(1px) scale(0.96);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+}
+
+/* 特殊按钮颜色 */
+#stcj-root .stcj-btn[data-action^="recent"] {
+  color: #ffd8a8;
+}
+
+#stcj-root .stcj-btn[data-action^="recent"]:hover {
+  color: #ffe8cc;
+  background: rgba(255, 216, 168, 0.15);
+}
+
+#stcj-root .stcj-btn[data-action^="current"] {
+  color: #b2f2bb;
+}
+
+#stcj-root .stcj-btn[data-action^="current"]:hover {
+  color: #d8f5d8;
+  background: rgba(178, 242, 187, 0.15);
+}
+
+#stcj-root .stcj-btn.stcj-toggle {
+  color: #a5d8ff;
+}
+
+#stcj-root .stcj-btn.stcj-toggle:hover {
+  color: #d0ebff;
+  background: rgba(165, 216, 255, 0.15);
+}
+
+/* 激活状态（图钉） */
 #stcj-root .stcj-btn.stcj-pin.stcj-pin-active {
-  outline: 2px solid rgba(255, 77, 79, 0.7);
-  outline-offset: 1px;
+  background: rgba(255, 107, 107, 0.2);
+  color: #ff8787;
+  border-color: rgba(255, 107, 107, 0.4);
 }
 
 #stcj-root .stcj-btn.stcj-pin[data-count]:not([data-count="0"])::after {
   content: attr(data-count);
   position: absolute;
-  top: -6px;
-  right: -6px;
+  top: -4px;
+  right: -4px;
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
+  border-radius: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 
-  font-size: 11px;
-  font-weight: 900;
+  font-size: 10px;
+  font-weight: 800;
   line-height: 1;
 
-  color: rgba(255, 255, 255, 0.96);
-  background: rgba(255, 77, 79, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  background: #fa5252;
+  border: 2px solid #2d2d2d;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-/* 收藏悬浮列表 */
+/* 收藏面板 */
 #stcj-root .stcj-fav-panel {
   position: absolute;
   display: none;
   flex-direction: column;
   gap: 6px;
 
-  min-width: 140px;
-  max-width: 260px;
-  max-height: 280px;
-  overflow: auto;
-  padding: 8px;
+  min-width: 160px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px;
 
-  background: rgba(25, 25, 25, 0.88);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 12px;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
-
-  touch-action: pan-y;
+  background: rgba(30, 30, 30, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
 }
 
 #stcj-root.stcj-fav-open .stcj-fav-panel {
   display: flex;
+  animation: stcjFadeIn 0.2s ease-out;
 }
 
-/* 竖向：默认把列表放到按钮栏左侧 */
+@keyframes stcjFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 面板位置 */
 #stcj-root.stcj-vertical .stcj-fav-panel {
   top: 0;
-  right: calc(100% + 8px);
+  right: calc(100% + 10px);
+  transform-origin: right top;
 }
 
-/* 横向：默认把列表放到按钮栏下方 */
 #stcj-root.stcj-horizontal .stcj-fav-panel {
   left: 0;
-  top: calc(100% + 8px);
+  top: calc(100% + 10px);
+  transform-origin: left top;
 }
 
 #stcj-root.stcj-collapsed .stcj-fav-panel {
@@ -238,46 +296,42 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 #stcj-root .stcj-fav-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
-  font-weight: 900;
-  opacity: 0.92;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
 }
 
 #stcj-root .stcj-fav-close {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
-  background: rgba(45, 45, 45, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.6);
+  transition: all 0.2s;
 }
 
 #stcj-root .stcj-fav-close:hover {
-  background: rgba(70, 70, 70, 0.9);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 #stcj-root .stcj-fav-hint {
   font-size: 12px;
-  opacity: 0.74;
-  line-height: 1.2;
-}
-
-#stcj-root .stcj-fav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-#stcj-root .stcj-fav-empty {
-  font-size: 12px;
-  opacity: 0.7;
-  padding: 6px 4px;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.4;
+  margin-bottom: 4px;
 }
 
 #stcj-root .stcj-fav-item {
@@ -285,119 +339,90 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-
-  background: rgba(45, 45, 45, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  margin-bottom: 1px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
 #stcj-root .stcj-fav-item:hover {
-  background: rgba(70, 70, 70, 0.9);
-}
-
-#stcj-root .stcj-fav-item:active {
-  transform: scale(0.98);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 #stcj-root .stcj-fav-floor {
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
+  color: #e0e0e0;
 }
 
 #stcj-root .stcj-fav-remove {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  font-weight: 900;
-  opacity: 0.8;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(25, 25, 25, 0.55);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.4);
+  transition: all 0.2s;
 }
 
 #stcj-root .stcj-fav-remove:hover {
-  opacity: 1;
-  background: rgba(255, 77, 79, 0.22);
-  border-color: rgba(255, 77, 79, 0.35);
+  background: rgba(255, 82, 82, 0.2);
+  color: #ff5252;
 }
 
-/* 收藏点选模式：鼠标图钉光标 + hover 高亮 */
-body.stcj-pin-mode #chat,
-body.stcj-pin-mode #chat * {
-  cursor: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cGF0aCBmaWxsPSIjZmY0ZDRmIiBkPSJNMTYgMmMtMy4zIDAtNiAyLjctNiA2IDAgMi4yIDEuMiA0LjEgMyA1LjFWMThsLTMgNHYyaDEydi0ybC0zLTR2LTQuOWMxLjgtMSAzLTMgMy01LjEgMC0zLjMtMi43LTYtNi02eiIvPjxwYXRoIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIGQ9Ik0xNiAyNHY2Ii8+PGNpcmNsZSBjeD0iMTYiIGN5PSIzMCIgcj0iMS4yIiBmaWxsPSIjZmZmZmZmIi8+PC9zdmc+') 16 30, auto !important;
-}
-
-body.stcj-pin-mode #chat .mes[mesid]:hover {
-  outline: 2px dashed rgba(255, 77, 79, 0.72);
-  outline-offset: 2px;
-  border-radius: 10px;
-}
-
-/* 收起状态：隐藏除“收起按钮”以外的所有功能按钮 */
+/* 收起状态只显示收起按钮 */
 #stcj-root.stcj-collapsed .stcj-btn:not(.stcj-collapse) {
   display: none;
 }
 
-#stcj-root .stcj-btn.stcj-toggle {
-  font-weight: 900;
-  opacity: 0.9;
+/* 移动端适配 */
+@media (max-width: 768px) {
+  #stcj-root .stcj-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  #stcj-root .stcj-btn.stcj-mini {
+    width: 28px;
+    height: 28px;
+  }
+
+  #stcj-root .stcj-handle {
+    opacity: 0.6;
+  }
 }
 
-#stcj-root .stcj-btn {
-  position: relative;
-}
-
-#stcj-root .stcj-btn:active {
-  transform: scale(0.96);
-}
-
-#stcj-root .stcj-btn:hover {
-  background: rgba(70, 70, 70, 0.9);
-}
-
-/* 跳转后闪烁定位 */
+/* 闪烁动画 */
 #chat .mes.stcj-flash {
-  outline: 2px solid rgba(80, 200, 120, 0.85);
-  outline-offset: 2px;
-  border-radius: 10px;
-  animation: stcjFlash 0.9s ease-in-out 1;
+  position: relative;
+  z-index: 10;
+  box-shadow: 0 0 0 2px rgba(81, 207, 102, 0.6) inset;
+  border-radius: 6px;
+  animation: stcjFlash 1s ease-out;
 }
 
 @keyframes stcjFlash {
   0% {
-    outline-color: rgba(80, 200, 120, 0.95);
-  }
-
-  50% {
-    outline-color: rgba(80, 200, 120, 0.2);
+    box-shadow: 0 0 0 4px rgba(81, 207, 102, 0.8) inset;
+    background: rgba(81, 207, 102, 0.1);
   }
 
   100% {
-    outline-color: rgba(80, 200, 120, 0.85);
+    box-shadow: 0 0 0 0 rgba(81, 207, 102, 0) inset;
+    background: transparent;
   }
 }
 
-@media (max-width: 768px) {
-  #stcj-root .stcj-btn {
-    width: 40px;
-    height: 40px;
-    font-size: 15px;
-  }
+/* 点选收藏模式：鼠标在聊天消息上显示图钉光标 */
+body.stcj-pin-mode #chat .mes {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23ff6b6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>') 12 24, pointer;
+}
 
-  #stcj-root .stcj-btn.stcj-mini {
-    width: 26px;
-    height: 26px;
-    font-size: 18px;
-  }
-
-  #stcj-root.stcj-horizontal .stcj-handle {
-    height: 40px;
-  }
-
-  #stcj-root.stcj-vertical .stcj-handle {
-    width: 40px;
-  }
+/* 点选收藏模式：图钉按钮本身也用图钉光标 */
+body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23ff6b6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>') 12 24, pointer;
 }

@@ -4,6 +4,7 @@
  * - 横/竖布局（按钮切换）
  * - 快速跳转：最近3楼、上一楼（头部）、下一楼（头部）
  * - H/L：对齐“当前楼层”的头部/尾部（用于精确定位）
+ * - 临时收藏列表
  */
 
 (function () {
@@ -59,6 +60,39 @@
   let lastChatKey = null;
   let lastChatRef = null;
   let lastChatLen = null;
+
+  const ICONS = {
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+    minus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+    horizontal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 8 3 12 7 16"></polyline><polyline points="17 8 21 12 17 16"></polyline><line x1="21" y1="12" x2="3" y2="12"></line></svg>',
+    vertical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 7 12 3 16 7"></polyline><polyline points="8 17 12 21 16 17"></polyline><line x1="12" y1="21" x2="12" y2="3"></line></svg>',
+    chevronUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>',
+    chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>',
+    chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>',
+    chevronRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>',
+    head: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7M5 5h14"/></svg>',
+    tail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7M5 19h14"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+    num: (n) => `<svg viewBox="0 0 24 24" fill="none"><text x="50%" y="55%" dominant-baseline="central" text-anchor="middle" font-weight="500" font-size="16" fill="currentColor" font-family="var(--sans-font, sans-serif)">${n}</text></svg>`,
+  };
+
+  /**
+   * @param {string} iconName
+   * @param {string} [title]
+   * @returns {string}
+   */
+  function getIcon(iconName, title = '') {
+    let svg = ICONS[iconName];
+    if (typeof svg === 'function') svg = svg(arguments[2] || '');
+    if (!svg) return '';
+    return svg;
+  }
+
+  function setIcon(el, iconName, extra) {
+    if (!el) return;
+    el.innerHTML = typeof ICONS[iconName] === 'function' ? ICONS[iconName](extra) : ICONS[iconName];
+  }
 
   function log(...args) {
     // eslint-disable-next-line no-console
@@ -230,7 +264,7 @@
       const rect = el.getBoundingClientRect();
       if (rect.bottom <= vpTop || rect.top >= vpBottom) return; // 不可见
 
-      // 覆盖顶部探针的消息：优先；如果出现多个（极少见），取 rect.top 更大的那个（更贴近顶部）
+      // 覆盖顶部探针的消息：优先；如果出现多个，取 rect.top 更大的那个（更贴近顶部）
       if (rect.top <= probeY && rect.bottom >= probeY) {
         if (rect.top > coverTop) {
           coverTop = rect.top;
@@ -392,7 +426,7 @@
     if (!btn) return;
 
     const isHorizontal = settings.orientation === 'horizontal';
-    btn.textContent = isHorizontal ? '↕' : '↔';
+    setIcon(btn, isHorizontal ? 'vertical' : 'horizontal');
     btn.title = isHorizontal ? '切换为竖向布局' : '切换为横向布局';
   }
 
@@ -401,7 +435,7 @@
     if (!btn) return;
 
     const collapsed = !!settings.collapsed;
-    btn.textContent = collapsed ? '+' : '–';
+    setIcon(btn, collapsed ? 'plus' : 'minus');
     btn.title = collapsed ? '展开跳转栏' : '收起跳转栏';
   }
 
@@ -411,15 +445,15 @@
     if (!prev || !next) return;
 
     const isVertical = settings.orientation === 'vertical';
-    prev.textContent = isVertical ? '↑' : '<';
-    next.textContent = isVertical ? '↓' : '>';
+    setIcon(prev, isVertical ? 'chevronUp' : 'chevronLeft');
+    setIcon(next, isVertical ? 'chevronDown' : 'chevronRight');
   }
 
   function updateFavPanelToggleButton(root) {
     const btn = root.querySelector('.stcj-btn[data-action="toggleFavPanel"]');
     if (!btn) return;
 
-    btn.textContent = favPanelOpen ? '▾' : '▸';
+    setIcon(btn, favPanelOpen ? 'chevronDown' : 'chevronRight');
     btn.title = favPanelOpen ? '收起收藏列表' : '展开收藏列表';
   }
 
@@ -512,9 +546,15 @@
 
     const hint = root.querySelector('.stcj-fav-hint');
     if (hint) {
-      hint.textContent = pinMode
-        ? '点选楼层收藏：点击聊天中的目标楼层（ESC 退出点选）'
-        : '点击 📌 进入点选收藏；点击条目可跳转到该楼层顶部';
+      if (favoriteMesIds.length > 0 && !pinMode) {
+        // 已有收藏楼层且非点选模式时，隐藏说明文字
+        hint.style.display = 'none';
+      } else {
+        hint.style.display = '';
+        hint.textContent = pinMode
+          ? '点选楼层收藏：点击聊天中的目标楼层（ESC 退出点选）'
+          : '点击 📌 进入点选收藏；点击条目可跳转到该楼层顶部';
+      }
     }
 
     const list = root.querySelector('.stcj-fav-list');
@@ -542,7 +582,7 @@
       const remove = document.createElement('div');
       remove.className = 'stcj-fav-remove';
       remove.title = '移除';
-      remove.textContent = '×';
+      setIcon(remove, 'close');
 
       item.appendChild(floor);
       item.appendChild(remove);
@@ -1092,25 +1132,25 @@
 
     root.innerHTML = `
       <div class="stcj-handle" title="拖拽移动"></div>
-      <div class="stcj-btn stcj-mini stcj-collapse" data-action="toggleCollapse" title="收起跳转栏">–</div>
-      <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">3</div>
-      <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">2</div>
-      <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">1</div>
-      <div class="stcj-btn stcj-toggle" data-action="toggleOrientation" title="切换横/竖布局">↔</div>
-      <div class="stcj-btn" data-action="prev" title="上一楼（跳到头部）">&lt;</div>
-      <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）">&gt;</div>
-      <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">H</div>
-      <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">L</div>
+      <div class="stcj-btn stcj-mini stcj-collapse" data-action="toggleCollapse"></div>
+      <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">${ICONS.num(3)}</div>
+      <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">${ICONS.num(2)}</div>
+      <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">${ICONS.num(1)}</div>
+      <div class="stcj-btn stcj-toggle" data-action="toggleOrientation"></div>
+      <div class="stcj-btn" data-action="prev" title="上一楼（跳到头部）"></div>
+      <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）"></div>
+      <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">${ICONS.head}</div>
+      <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">${ICONS.tail}</div>
 
       <div class="stcj-pin-group">
-        <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏（仅本页临时）">📌</div>
-        <div class="stcj-btn stcj-pin-arrow" data-action="toggleFavPanel" title="展开收藏列表">▸</div>
+        <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${ICONS.pin}</div>
+        <div class="stcj-btn stcj-pin-arrow" data-action="toggleFavPanel"></div>
       </div>
 
       <div class="stcj-fav-panel" aria-hidden="true">
         <div class="stcj-fav-header">
-          <div class="stcj-fav-title">收藏</div>
-          <div class="stcj-fav-close" title="关闭">×</div>
+          <div class="stcj-fav-title">${ICONS.pin} 收藏</div>
+          <div class="stcj-fav-close" title="关闭">${ICONS.close}</div>
         </div>
         <div class="stcj-fav-hint"></div>
         <div class="stcj-fav-list"></div>
