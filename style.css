@@ -183,6 +183,76 @@
   color: #ffd8a8;
 }
 
+#stcj-root .stcj-btn[data-action="showRange"],
+#stcj-root .stcj-btn[data-action="resetRange"],
+#stcj-root .stcj-btn[data-action="editRange"] {
+  color: #e5dbff;
+}
+
+#stcj-root .stcj-range-chip {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(197, 168, 255, 0.15);
+  border: 1px solid rgba(197, 168, 255, 0.35);
+  color: #f3edff;
+  font-size: 12px;
+  line-height: 1;
+}
+
+#stcj-root .stcj-range-chip.stcj-show {
+  display: inline-flex;
+}
+
+#stcj-root .stcj-range-chip-label {
+  opacity: 0.8;
+}
+
+#stcj-root .stcj-range-chip-value {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+#stcj-root .stcj-btn.stcj-range-edit {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  font-weight: 800;
+  color: inherit;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#stcj-root .stcj-btn.stcj-range-edit:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+#stcj-root .stcj-btn.stcj-hidden {
+  display: none !important;
+}
+
+#stcj-root .stcj-btn[data-action="resetRange"] svg {
+  /* 该图标视觉重心偏上，轻微下移做居中修正 */
+  transform: translateY(1px);
+}
+
+
+
+#stcj-root .stcj-btn[data-action="showRange"]:hover,
+#stcj-root .stcj-btn[data-action="resetRange"]:hover {
+  color: #f3edff;
+  background: rgba(197, 168, 255, 0.18);
+}
+
+#stcj-root.stcj-range-active .stcj-btn[data-action="showRange"] {
+  color: #f3edff;
+  background: rgba(197, 168, 255, 0.24);
+  border-color: rgba(226, 208, 255, 0.4);
+}
+
 #stcj-root .stcj-btn[data-action^="recent"]:hover {
   color: #ffe8cc;
   background: rgba(255, 216, 168, 0.15);
@@ -204,6 +274,27 @@
 #stcj-root .stcj-btn.stcj-toggle:hover {
   color: #d0ebff;
   background: rgba(165, 216, 255, 0.15);
+}
+
+/* 禁用态（如“恢复默认”在未启用区间时） */
+#stcj-root .stcj-btn.stcj-disabled,
+#stcj-root .stcj-btn.stcj-disabled:hover,
+#stcj-root .stcj-btn.stcj-disabled:active {
+  opacity: 0.45;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+  transform: none;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+#stcj-root .stcj-btn.stcj-disabled {
+  pointer-events: none;
+}
+
+#stcj-root.stcj-collapsed .stcj-range-chip {
+  display: none !important;
 }
 
 /* 激活状态（图钉） */
@@ -420,6 +511,20 @@
 /* 点选收藏模式：鼠标在聊天消息上显示图钉光标 */
 body.stcj-pin-mode #chat .mes {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23ff6b6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>') 12 24, pointer;
+}
+
+#stcj-root.stcj-vertical .stcj-range-chip {
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+}
+
+#stcj-root.stcj-horizontal .stcj-range-chip {
+  flex-direction: row;
+}
+
+#stcj-root.stcj-vertical .stcj-range-chip-label {
+  font-size: 11px;
 }
 
 /* 点选收藏模式：图钉按钮本身也用图钉光标 */

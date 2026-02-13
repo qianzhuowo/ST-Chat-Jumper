@@ -4,6 +4,7 @@
  * - 横/竖布局（按钮切换）
  * - 快速跳转：最近3楼、上一楼（头部）、下一楼（头部）
  * - H/L：对齐“当前楼层”的头部/尾部（用于精确定位）
+ * - 显示楼层区间 / 恢复默认视图
  * - 临时收藏列表
  */
 
@@ -59,6 +60,9 @@
   let chatWatchInterval = null;
   let lastChatKey = null;
   let lastChatRef = null;
+  /** @type {null|{start:number,end:number}} */
+  let activeRange = null;
+
   let lastChatLen = null;
 
   const ICONS = {
@@ -75,6 +79,8 @@
     pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
     num: (n) => `<svg viewBox="0 0 24 24" fill="none"><text x="50%" y="55%" dominant-baseline="central" text-anchor="middle" font-weight="500" font-size="16" fill="currentColor" font-family="var(--sans-font, sans-serif)">${n}</text></svg>`,
+    range: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"></path></svg>',
+    restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15A9 9 0 1 1 23 10"></path></svg>',
   };
 
   /**
@@ -364,6 +370,165 @@
     return false;
   }
 
+  function formatRangeText(range) {
+    if (!range) return '-';
+    return `${range.start}-${range.end}`;
+  }
+
+  function updateRangeButtons(root) {
+    const rangeBtn = root.querySelector('.stcj-btn[data-action="showRange"]');
+    const resetBtn = root.querySelector('.stcj-btn[data-action="resetRange"]');
+    const editBtn = root.querySelector('.stcj-btn[data-action="editRange"]');
+    const rangeChip = root.querySelector('.stcj-range-chip');
+    const rangeValue = root.querySelector('.stcj-range-chip-value');
+    const isActive = !!activeRange;
+    const currentText = formatRangeText(activeRange);
+
+    root.classList.toggle('stcj-range-active', isActive);
+
+    if (rangeChip) {
+      rangeChip.classList.toggle('stcj-show', isActive);
+      rangeChip.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+    }
+
+    if (rangeValue) rangeValue.textContent = currentText;
+
+    if (rangeBtn) {
+      rangeBtn.title = isActive
+        ? `显示楼层区间（当前：${currentText}）`
+        : '显示楼层区间';
+    }
+
+    if (resetBtn) {
+      resetBtn.classList.toggle('stcj-hidden', !isActive);
+      resetBtn.classList.toggle('stcj-disabled', !isActive);
+      resetBtn.title = isActive
+        ? `恢复默认聊天视图（当前：${currentText}）`
+        : '当前已是默认聊天视图';
+    }
+
+    if (editBtn) {
+      editBtn.classList.toggle('stcj-disabled', !isActive);
+      editBtn.title = isActive ? `修改当前区间（${currentText}）` : '需先显示区间后才能修改';
+    }
+  }
+
+  function setActiveRange(range) {
+    activeRange = range;
+
+    const root = document.getElementById(ROOT_ID);
+    if (root) updateRangeButtons(root);
+  }
+
+  function parseRangeInput(raw, maxId) {
+    if (typeof raw !== 'string') return null;
+    const match = raw.trim().replace(/\s+/g, '').match(/^(\d+)-(\d+)$/);
+    if (!match) return null;
+
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+
+    if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+    if (start < 0 || start > end || end > maxId) return null;
+
+    return { start, end };
+  }
+
+  async function showRangePrompt(maxId) {
+    const tip = `请输入显示区间（格式: 0-10，范围: 0-${maxId}）`;
+    const defaultValue = activeRange
+      ? `${activeRange.start}-${activeRange.end}`
+      : `0-${Math.min(10, maxId)}`;
+
+    let value = null;
+
+    try {
+      if (typeof window.SillyTavern?.callGenericPopup === 'function') {
+        value = await window.SillyTavern.callGenericPopup(tip, window.SillyTavern?.POPUP_TYPE?.INPUT);
+      }
+    } catch {
+      value = null;
+    }
+
+    if (typeof value !== 'string') {
+      value = window.prompt(tip, defaultValue);
+    }
+
+    if (typeof value !== 'string') return null;
+    return value.trim();
+  }
+
+  async function showFloorRange() {
+    const ctx = window.SillyTavern?.getContext?.();
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat : null;
+    const chatEl = getChatContainer();
+
+    if (!chat || !chatEl || chat.length === 0) {
+      toastWarn('当前聊天为空，无法按区间显示。');
+      return false;
+    }
+
+    const maxId = chat.length - 1;
+    const input = await showRangePrompt(maxId);
+    if (!input) {
+      toastError('未填入有效区间。');
+      return false;
+    }
+
+    const range = parseRangeInput(input, maxId);
+    if (!range) {
+      toastError(`未填入有效区间（应为 0-${maxId} 内的 a-b）。`);
+      return false;
+    }
+
+    if (typeof ctx.addOneMessage !== 'function') {
+      toastError('当前环境不支持 addOneMessage，无法显示区间。');
+      return false;
+    }
+
+    chatEl.replaceChildren();
+    for (let i = range.start; i <= range.end; i++) {
+      ctx.addOneMessage(chat[i], { forceId: i });
+    }
+
+    getChatScrollElement()?.scrollTo?.({ top: 0, behavior: 'auto' });
+    setActiveRange(range);
+    toastSuccess(`已显示楼层区间：${range.start}-${range.end}`);
+    return true;
+  }
+
+  async function restoreDefaultRangeView() {
+    if (!activeRange) {
+      toastInfo('当前已是默认聊天视图。');
+      return true;
+    }
+
+    try {
+      if (typeof window.SillyTavern?.reloadCurrentChat === 'function') {
+        await window.SillyTavern.reloadCurrentChat();
+      } else if (typeof window.SillyTavern?.getContext === 'function') {
+        const ctx = window.SillyTavern?.getContext?.();
+        if (typeof ctx?.reloadCurrentChat === 'function') {
+          await ctx.reloadCurrentChat();
+        } else {
+          toastError('当前环境不支持恢复默认聊天视图。');
+          return false;
+        }
+      } else {
+        toastError('当前环境不支持恢复默认聊天视图。');
+        return false;
+      }
+
+      setActiveRange(null);
+      toastSuccess('已恢复默认聊天视图。');
+      return true;
+    } catch (e) {
+      log('恢复默认聊天视图失败', e);
+      toastError('恢复默认聊天视图失败，请稍后重试。');
+      return false;
+    }
+  }
+
   async function handleAction(action) {
     const lastId = getLastMessageId();
 
@@ -380,6 +545,14 @@
       case 'toggleCollapse':
         toggleCollapse();
         return;
+
+      // 楼层区间显示 / 恢复默认
+      case 'showRange':
+        return showFloorRange();
+      case 'resetRange':
+        return restoreDefaultRangeView();
+      case 'editRange':
+        return showFloorRange();
 
       // 布局切换
       case 'toggleOrientation':
@@ -771,6 +944,7 @@
     favoriteMesIds = [];
     setPinMode(false);
     setFavPanelOpen(false);
+    setActiveRange(null);
 
     const root = document.getElementById(ROOT_ID);
     if (root) updateFavoritesUI(root);
@@ -1114,6 +1288,7 @@
       btn.addEventListener('pointerup', async () => {
         // 如果刚刚拖拽，则不触发按钮动作
         if (isDragging) return;
+        if (btn.classList.contains('stcj-disabled')) return;
 
         const action = btn.getAttribute('data-action');
         if (!action) return;
@@ -1136,6 +1311,13 @@
       <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">${ICONS.num(3)}</div>
       <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">${ICONS.num(2)}</div>
       <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">${ICONS.num(1)}</div>
+      <div class="stcj-btn" data-action="showRange" title="显示楼层区间">${ICONS.range}</div>
+      <div class="stcj-btn stcj-hidden" data-action="resetRange" title="恢复默认聊天视图">${ICONS.restore}</div>
+      <div class="stcj-range-chip" aria-live="polite" aria-hidden="true">
+        <span class="stcj-range-chip-label">区间</span>
+        <span class="stcj-range-chip-value">-</span>
+        <div class="stcj-btn stcj-mini stcj-range-edit" data-action="editRange" title="修改当前区间">改</div>
+      </div>
       <div class="stcj-btn stcj-toggle" data-action="toggleOrientation"></div>
       <div class="stcj-btn" data-action="prev" title="上一楼（跳到头部）"></div>
       <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）"></div>
@@ -1168,6 +1350,7 @@
     updatePrevNextButtons(root);
     updateFavPanelToggleButton(root);
     updateFavoritesUI(root);
+    updateRangeButtons(root);
 
     // 初始位置
     applyRootPositionFromSettings(root);
