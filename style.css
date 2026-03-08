@@ -189,6 +189,17 @@
   color: #e5dbff;
 }
 
+/* ✏️ 快速编辑 */
+#stcj-root .stcj-btn[data-action="quickEdit"] {
+  color: #b2f2bb;
+}
+
+#stcj-root .stcj-btn[data-action="quickEdit"].stcj-editing {
+  color: #d3f9d8;
+  background: rgba(178, 242, 187, 0.18);
+  border-color: rgba(178, 242, 187, 0.35);
+}
+
 #stcj-root .stcj-range-chip {
   display: none;
   align-items: center;

@@ -48,6 +48,12 @@
   let favPanelOpen = false;
   let pinMode = false;
 
+  // ===== 快速编辑（铅笔） =====
+  /** @type {null|{mesId:number, scrollTop:number|null, scrollEl:HTMLElement|null, selectionCtx:null|{selectedText:string,before:string,after:string,displayText:string,start:number,end:number}, detachOutside: null|(() => void), monitorTimer:number|null}} */
+  let quickEditState = null;
+  /** @type {null|HTMLElement} */
+  let quickEditMirror = null;
+
   let suppressNextChatClick = false;
 
   let pinDown = null;
@@ -81,6 +87,8 @@
     num: (n) => `<svg viewBox="0 0 24 24" fill="none"><text x="50%" y="55%" dominant-baseline="central" text-anchor="middle" font-weight="500" font-size="16" fill="currentColor" font-family="var(--sans-font, sans-serif)">${n}</text></svg>`,
     range: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"></path></svg>',
     restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15A9 9 0 1 1 23 10"></path></svg>',
+    pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
   };
 
   /**
@@ -370,6 +378,847 @@
     return false;
   }
 
+  // =====================
+  // 快速编辑（铅笔按钮）
+  // =====================
+
+  const QUICK_EDIT = {
+    EDIT_BUTTON_SELECTORS: ['.mes_edit', '.fa-edit', '.fa-pencil'],
+    DONE_BUTTON_SELECTOR: '.mes_edit_done',
+    TEXT_CONTAINER_SELECTORS: ['.mes_text', '.mes_text_inner', '.mes_text_block'],
+    EDIT_TEXTAREA_SELECTOR: '#curEditTextarea',
+    SCROLL_INTO_VIEW_OFFSET: 120,
+    EDITOR_SCROLL_ALIGNMENT_RATIO: 0.3,
+  };
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    try {
+      return !!(el.offsetParent || el.getClientRects().length);
+    } catch {
+      return false;
+    }
+  }
+
+  function getQuickEditButton(root) {
+    return root?.querySelector?.('.stcj-btn[data-action="quickEdit"]') || null;
+  }
+
+  function updateQuickEditButton(root) {
+    const btn = getQuickEditButton(root);
+    if (!btn) return;
+    const editing = !!quickEditState && isElementVisible(document.querySelector(QUICK_EDIT.EDIT_TEXTAREA_SELECTOR));
+    setIcon(btn, editing ? 'check' : 'pencil');
+    btn.classList.toggle('stcj-editing', editing);
+    btn.title = editing ? '保存编辑（完成）' : '快速编辑：选中文字可高亮定位；无选中则编辑当前楼层';
+  }
+
+  function getMessageTextContainer(mesEl) {
+    if (!mesEl) return null;
+    for (const sel of QUICK_EDIT.TEXT_CONTAINER_SELECTORS) {
+      const el = mesEl.querySelector(sel);
+      if (el) return el;
+    }
+    return mesEl;
+  }
+
+  function getSelectionContextInElement(containerEl, env) {
+    try {
+      const win = env?.win || window;
+      const doc = env?.doc || document;
+      const sel = win.getSelection?.();
+      if (!sel || sel.rangeCount <= 0 || sel.isCollapsed) return null;
+      const range = sel.getRangeAt(0);
+      if (!containerEl.contains(range.commonAncestorContainer)) return null;
+
+      // 用 Range.toString() 来获得与 offset 计算一致的“显示文本”
+      const fullRange = doc.createRange();
+      fullRange.selectNodeContents(containerEl);
+      const displayText = fullRange.toString();
+
+      const preStart = doc.createRange();
+      preStart.selectNodeContents(containerEl);
+      preStart.setEnd(range.startContainer, range.startOffset);
+      const start = preStart.toString().length;
+
+      const preEnd = doc.createRange();
+      preEnd.selectNodeContents(containerEl);
+      preEnd.setEnd(range.endContainer, range.endOffset);
+      const end = preEnd.toString().length;
+
+      const selectedText = range.toString();
+      const before = displayText.slice(Math.max(0, start - 60), start);
+      const after = displayText.slice(end, end + 60);
+
+      return { selectedText, before, after, displayText, start, end };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 取“用户框选的文本”所在的楼层与上下文。
+   *
+   * 重要：一些渲染插件（例如把 <fantasy_log> 渲染为 UI）会把可选文本放进 iframe，
+   * 这时 parent window.getSelection() 取不到选区。这里会额外扫描 #chat 内可访问的 iframe。
+   *
+   * @returns {null|{mesEl:HTMLElement, mesId:number, selectionCtx:null|{selectedText:string,before:string,after:string,displayText:string,start:number,end:number}}}
+   */
+  function getSelectionInfo() {
+    // 1) 主文档选择
+    try {
+      const sel = window.getSelection?.();
+      if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const node = range.commonAncestorContainer;
+        const el = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        const mesEl = el?.closest?.('#chat .mes[mesid]') || null;
+        if (mesEl) {
+          const mesId = parseInt(mesEl.getAttribute('mesid') || '', 10);
+          if (!Number.isNaN(mesId)) {
+            const container = getMessageTextContainer(mesEl) || mesEl;
+            const selectionCtx = getSelectionContextInElement(container, { win: window, doc: document });
+            return { mesEl, mesId, selectionCtx };
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // 2) iframe 内选择（同源/可访问的情况下）
+    try {
+      const frames = document.querySelectorAll('#chat iframe');
+      for (const iframe of frames) {
+        try {
+          const win = iframe.contentWindow;
+          const doc = iframe.contentDocument;
+          if (!win || !doc) continue;
+          const sel = win.getSelection?.();
+          if (!sel || sel.isCollapsed || sel.rangeCount <= 0) continue;
+
+          const mesEl = iframe.closest?.('#chat .mes[mesid]') || null;
+          if (!mesEl) continue;
+
+          const mesId = parseInt(mesEl.getAttribute('mesid') || '', 10);
+          if (Number.isNaN(mesId)) continue;
+
+          const container = doc.body || doc.documentElement;
+          if (!container) continue;
+          const selectionCtx = getSelectionContextInElement(container, { win, doc });
+          return { mesEl, mesId, selectionCtx };
+        } catch {
+          // 跨域 iframe / blob 访问失败等：跳过
+          continue;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return null;
+  }
+
+  /**
+   * 直接从 SillyTavern.getContext().chat[mesId] 读取“楼层原文”。
+   * - 优先取当前 swipe（若存在）
+   * - 兼容 swipe 为 string / 数组(parts) 的格式
+   *
+   * @param {number} mesId
+   * @returns {string|null}
+   */
+  function getRawMessageTextFromContext(mesId) {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      const chat = ctx?.chat;
+      if (!Array.isArray(chat)) return null;
+      const msg = chat?.[mesId];
+      if (!msg) return null;
+
+      const getPartText = (p) => {
+        if (p == null) return '';
+        if (typeof p === 'string') return p;
+        if (typeof p === 'object' && 'text' in p) return String(p.text ?? '');
+        return String(p);
+      };
+
+      const joinMaybeParts = (val) => {
+        if (val == null) return '';
+        if (Array.isArray(val)) return val.map(getPartText).join('');
+        return String(val);
+      };
+
+      // swipes 优先
+      if (Array.isArray(msg.swipes) && msg.swipes.length > 0) {
+        const rawSwipeId =
+          Number.isInteger(msg.swipe_id) ? msg.swipe_id :
+            (Number.isInteger(msg.swipeId) ? msg.swipeId :
+              (Number.isInteger(msg.swipeID) ? msg.swipeID : 0));
+        const idx = Math.trunc(clamp(rawSwipeId, 0, Math.max(0, msg.swipes.length - 1)));
+        const swipe = msg.swipes[idx];
+        const text = joinMaybeParts(swipe);
+        if (text) return text;
+      }
+
+      const base = msg.mes ?? msg.message ?? msg.text;
+      const out = joinMaybeParts(base);
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeAndMap(text, options) {
+    const opts = {
+      ignoreMarkdown: true,
+      ignoreHtmlTags: false,
+      treatBrAsNewline: true,
+      ignorePunct: false,
+      ...(options || {}),
+    };
+
+    /** @type {number[]} normIndex -> originalIndex */
+    const map = [];
+    let out = '';
+    let lastWasSpace = false;
+
+    for (let i = 0; i < text.length; i++) {
+      let ch = text[i];
+      if (ch === '\r') continue;
+
+      // 处理 HTML 标签：在原文里经常存在（例如 <quest>xxx</quest> 或 <br>），
+      // 但在选区（显示文本）里不会包含标签本体，导致无法匹配。
+      if (opts.ignoreHtmlTags && ch === '<') {
+        const close = text.indexOf('>', i + 1);
+        // 避免把普通文本里的 "<" 误当标签：要求 200 字符内闭合
+        if (close !== -1 && close - i <= 200) {
+          const rawTag = text.slice(i + 1, close).trim();
+          const tagName = rawTag.replace(/^[!/\s]+/, '').split(/[\s/>]/)[0]?.toLowerCase?.() || '';
+
+          if (opts.treatBrAsNewline && (tagName === 'br' || tagName === 'p' || tagName === '/p' || tagName === 'div' || tagName === '/div')) {
+            // 用一个空白占位，后续会统一折叠空白
+            if (!lastWasSpace) {
+              out += ' ';
+              map.push(i);
+              lastWasSpace = true;
+            }
+          }
+
+          i = close;
+          continue;
+        }
+      }
+
+      // HTML entity（非常粗略的处理，主要覆盖常见场景；更复杂的交给模糊匹配兜底）
+      if (opts.ignoreHtmlTags && ch === '&') {
+        const semi = text.indexOf(';', i + 1);
+        if (semi !== -1 && semi - i <= 20) {
+          const ent = text.slice(i + 1, semi);
+          let decoded = null;
+          if (ent === 'nbsp') decoded = ' ';
+          else if (ent === 'lt') decoded = '<';
+          else if (ent === 'gt') decoded = '>';
+          else if (ent === 'amp') decoded = '&';
+          else if (ent === 'quot') decoded = '"';
+          else if (ent === 'apos') decoded = "'";
+          else if (ent.startsWith('#x')) {
+            const code = parseInt(ent.slice(2), 16);
+            if (Number.isFinite(code)) decoded = String.fromCharCode(code);
+          } else if (ent.startsWith('#')) {
+            const code = parseInt(ent.slice(1), 10);
+            if (Number.isFinite(code)) decoded = String.fromCharCode(code);
+          }
+
+          if (decoded != null) {
+            ch = decoded;
+            i = semi;
+          }
+        }
+      }
+
+      if (opts.ignoreMarkdown && (ch === '*' || ch === '_' || ch === '~' || ch === '`')) continue;
+
+      // 极端兜底：模糊匹配时忽略标点/符号（包含中英文标点），提升“正则处理/隐藏符号”场景的命中率
+      if (opts.ignorePunct) {
+        try {
+          if (/\p{P}|\p{S}/u.test(ch)) continue;
+        } catch {
+          // older runtime fallback: 仅忽略常见标点
+          if (/[\.,!?:;\-—–()\[\]{}<>"'“”‘’、，。！？：；【】（）《》]/.test(ch)) continue;
+        }
+      }
+
+      // 统一空白：不同换行/空格都归一为一个空格，且连续空白折叠
+      if (/\s/.test(ch)) {
+        if (lastWasSpace) continue;
+        ch = ' ';
+        lastWasSpace = true;
+      } else {
+        lastWasSpace = false;
+      }
+
+      const lower = ch.toLowerCase();
+      out += lower;
+      // 注意：out 的索引是 UTF-16 code unit；这里 ch 是单个 code unit（我们按 i 遍历）
+      map.push(i);
+    }
+
+    return { norm: out, map };
+  }
+
+  function commonSuffixLen(a, b) {
+    const n = Math.min(a.length, b.length);
+    let count = 0;
+    for (let i = 1; i <= n; i++) {
+      if (a[a.length - i] !== b[b.length - i]) break;
+      count++;
+    }
+    return count;
+  }
+
+  function commonPrefixLen(a, b) {
+    const n = Math.min(a.length, b.length);
+    let count = 0;
+    for (let i = 0; i < n; i++) {
+      if (a[i] !== b[i]) break;
+      count++;
+    }
+    return count;
+  }
+
+  /**
+   * 基于“选区 + 前后上下文”的定位：
+   * - 解决重复文本（多个相同子串）导致的误选
+   * - 兼容部分“显示正则/Markdown”导致的符号差异（可切换更模糊的 ignorePunct）
+   */
+  function findBestMatchInEditor(rawText, selectionCtx, options) {
+    if (!rawText || !selectionCtx?.selectedText) return null;
+
+    const { selectedText, before, after, start, displayText } = selectionCtx;
+    const displayLen = (displayText?.length || 0);
+    const expectedRatio =
+      typeof options?.expectedRatioOverride === 'number' && Number.isFinite(options.expectedRatioOverride)
+        ? clamp(options.expectedRatioOverride, 0, 1)
+        : (displayLen > 0 ? clamp(start / displayLen, 0, 1) : 0);
+
+    const { norm: rawNorm, map: rawMap } = normalizeAndMap(String(rawText), options);
+    const { norm: selNorm } = normalizeAndMap(String(selectedText), options);
+    const { norm: beforeNorm } = normalizeAndMap(String(before || ''), options);
+    const { norm: afterNorm } = normalizeAndMap(String(after || ''), options);
+
+    if (!selNorm) return null;
+
+    /** @type {number[]} */
+    const indices = [];
+    for (let idx = rawNorm.indexOf(selNorm); idx !== -1; idx = rawNorm.indexOf(selNorm, idx + 1)) {
+      indices.push(idx);
+      if (indices.length > 200) break; // 防御：避免极端长文本 + 极短 needle 卡死
+    }
+
+    if (!indices.length) return null;
+
+    const expected = Math.round(rawNorm.length * expectedRatio);
+    let best = { idx: indices[0], score: -Infinity };
+
+    for (const idx of indices) {
+      const left = rawNorm.slice(Math.max(0, idx - beforeNorm.length), idx);
+      const right = rawNorm.slice(idx + selNorm.length, idx + selNorm.length + afterNorm.length);
+
+      const scoreBefore = commonSuffixLen(left, beforeNorm);
+      const scoreAfter = commonPrefixLen(right, afterNorm);
+
+      // 越接近“选区大致相对位置”越好（用于进一步打破平分）
+      const posPenalty = Math.abs(idx - expected) * 0.02;
+
+      const score = scoreBefore + scoreAfter - posPenalty;
+      if (score > best.score) best = { idx, score };
+    }
+
+    const startNorm = best.idx;
+    const endNorm = best.idx + selNorm.length - 1;
+    if (startNorm < 0 || endNorm >= rawMap.length) return null;
+
+    const rawStart = rawMap[startNorm];
+    const rawEnd = rawMap[endNorm] + 1;
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd) || rawEnd <= rawStart) return null;
+
+    return { start: rawStart, end: rawEnd, score: best.score };
+  }
+
+  /**
+   * 在某段文本中尝试定位 selectionCtx（严格 -> 忽略 HTML 标签 -> 更模糊）。
+   * @param {string} text
+   * @param {any} selectionCtx
+   * @param {{expectedRatioOverride?: number}|null} extra
+   */
+  function computeMatchWithFallbacks(text, selectionCtx, extra) {
+    if (!text || !selectionCtx?.selectedText) return null;
+    const expectedRatioOverride = extra?.expectedRatioOverride;
+
+    // 1) 严格：忽略 Markdown 符号 + 空白归一
+    let match = findBestMatchInEditor(text, selectionCtx, {
+      ignoreMarkdown: true,
+      ignorePunct: false,
+      expectedRatioOverride,
+    });
+
+    // 2) HTML 兜底：忽略标签（解决 <quest>xxx</quest> / <br> / 自定义标签等导致的差异）
+    if (!match) {
+      match = findBestMatchInEditor(text, selectionCtx, {
+        ignoreMarkdown: true,
+        ignoreHtmlTags: true,
+        ignorePunct: false,
+        expectedRatioOverride,
+      });
+    }
+
+    // 3) 更模糊兜底：忽略标点/符号
+    if (!match) {
+      match = findBestMatchInEditor(text, selectionCtx, {
+        ignoreMarkdown: true,
+        ignoreHtmlTags: true,
+        ignorePunct: true,
+        expectedRatioOverride,
+      });
+    }
+
+    return match;
+  }
+
+  function pickBetterMatch(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    const sa = typeof a.score === 'number' ? a.score : -Infinity;
+    const sb = typeof b.score === 'number' ? b.score : -Infinity;
+    return sb > sa ? b : a;
+  }
+
+  /**
+   * 将“另一份原文（ctx）里匹配到的位置”尽量映射回 textarea 文本。
+   * 说明：当 ctx 原文与 textarea.value 存在轻微差异（实体/换行/插件改写）时，直接用 start/end 可能不准。
+   * 这里会用“该片段 + ctx 前后上下文”再次在 textarea 中做一次定位。
+   */
+  function mapMatchToTextarea(textareaText, otherText, otherMatch) {
+    if (!textareaText || !otherText || !otherMatch) return null;
+    if (textareaText === otherText) return otherMatch;
+
+    try {
+      const needle = otherText.slice(otherMatch.start, otherMatch.end);
+      if (!needle) return null;
+
+      // 先尝试直接查找（仅当唯一命中时使用，避免重复子串误判）
+      const first = textareaText.indexOf(needle);
+      if (first !== -1) {
+        const second = textareaText.indexOf(needle, first + needle.length);
+        if (second === -1) {
+          return { start: first, end: first + needle.length, score: otherMatch.score };
+        }
+      }
+
+      const before = otherText.slice(Math.max(0, otherMatch.start - 60), otherMatch.start);
+      const after = otherText.slice(otherMatch.end, otherMatch.end + 60);
+      const pseudo = {
+        selectedText: needle,
+        before,
+        after,
+        displayText: otherText,
+        start: otherMatch.start,
+        end: otherMatch.end,
+      };
+
+      const ratio = otherText.length > 0 ? clamp(otherMatch.start / otherText.length, 0, 1) : 0;
+      return computeMatchWithFallbacks(textareaText, pseudo, { expectedRatioOverride: ratio });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 双通道：
+   * - 通道 A：textarea.value（最终要高亮的文本）
+   * - 通道 B：SillyTavern.getContext().chat[mesId] 原文（更“原始”，不受 DOM/渲染影响）
+   *
+   * 策略：
+   * 1) 先在 textarea 内匹配；
+   * 2) 若 ctx 原文也能匹配，使用其位置比例（expectedRatio）来改进 textarea 的歧义选择；
+   * 3) 若 textarea 匹配失败，尝试把 ctx 的命中片段映射回 textarea。
+   */
+  function computeBestMatchForTextarea(textareaText, ctxText, selectionCtx) {
+    if (!textareaText || !selectionCtx?.selectedText) return null;
+
+    const base = computeMatchWithFallbacks(textareaText, selectionCtx, null);
+    let best = base;
+
+    if (ctxText) {
+      const ctxMatch = computeMatchWithFallbacks(ctxText, selectionCtx, null);
+      if (ctxMatch) {
+        const ratio = ctxText.length > 0 ? clamp(ctxMatch.start / ctxText.length, 0, 1) : 0;
+
+        // 用 ctx 的“相对位置”帮助 textarea 在重复子串中选对位置
+        const adjusted = computeMatchWithFallbacks(textareaText, selectionCtx, { expectedRatioOverride: ratio });
+        best = pickBetterMatch(best, adjusted);
+
+        // 用 ctx 命中的前后上下文，反推 textarea 中的位置。
+        // 显著改善“选区来自 iframe 渲染 UI（上下文与原文完全不同）”时的定位效果。
+        try {
+          const needle = ctxText.slice(ctxMatch.start, ctxMatch.end);
+          const before = ctxText.slice(Math.max(0, ctxMatch.start - 60), ctxMatch.start);
+          const after = ctxText.slice(ctxMatch.end, ctxMatch.end + 60);
+          const ctxDrivenCtx = {
+            selectedText: needle,
+            before,
+            after,
+            displayText: ctxText,
+            start: ctxMatch.start,
+            end: ctxMatch.end,
+          };
+          const ctxDriven = computeMatchWithFallbacks(textareaText, ctxDrivenCtx, { expectedRatioOverride: ratio });
+          best = pickBetterMatch(best, ctxDriven);
+        } catch {
+          /* ignore */
+        }
+
+        // 若仍然失败，则尝试把 ctx 命中的片段映射回 textarea
+        if (!best) {
+          const mapped = mapMatchToTextarea(textareaText, ctxText, ctxMatch);
+          if (mapped) best = mapped;
+        }
+      }
+    }
+
+    return best;
+  }
+
+  function ensureQuickEditMirror(textarea) {
+    if (quickEditMirror && quickEditMirror.isConnected) return quickEditMirror;
+
+    const div = document.createElement('div');
+    div.style.cssText = `
+      position: absolute;
+      visibility: hidden;
+      pointer-events: none;
+      box-sizing: border-box;
+      left: -9999px;
+      top: -9999px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    `;
+    document.body.appendChild(div);
+    quickEditMirror = div;
+    return div;
+  }
+
+  function scrollTextareaToSelection(textarea) {
+    try {
+      const mirror = ensureQuickEditMirror(textarea);
+      const style = getComputedStyle(textarea);
+      mirror.style.width = `${textarea.clientWidth}px`;
+      mirror.style.padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
+      mirror.style.font = style.font;
+      mirror.style.fontSize = style.fontSize;
+      mirror.style.fontFamily = style.fontFamily;
+      mirror.style.fontWeight = style.fontWeight;
+      mirror.style.lineHeight = style.lineHeight;
+
+      const pos = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : 0;
+      mirror.textContent = textarea.value.substring(0, pos);
+
+      const caretY = mirror.offsetHeight;
+      let target = caretY - textarea.clientHeight * QUICK_EDIT.EDITOR_SCROLL_ALIGNMENT_RATIO;
+      target = Math.max(0, target);
+      const max = Math.max(0, textarea.scrollHeight - textarea.clientHeight);
+      target = Math.min(max, target);
+      textarea.scrollTop = target;
+    } catch (e) {
+      log('scrollTextareaToSelection failed', e);
+    }
+  }
+
+  function scrollMessageToComfortPosition(mesEl) {
+    const scrollEl = getChatScrollElement();
+    if (!mesEl || !scrollEl) return;
+    try {
+      const vp = scrollEl.getBoundingClientRect();
+      const rect = mesEl.getBoundingClientRect();
+      const delta = rect.top - vp.top;
+      const nextTop = scrollEl.scrollTop + delta - QUICK_EDIT.SCROLL_INTO_VIEW_OFFSET;
+      scrollEl.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function getCurrentEditTextarea() {
+    const el = document.querySelector(QUICK_EDIT.EDIT_TEXTAREA_SELECTOR);
+    return el && isElementVisible(el) ? el : null;
+  }
+
+  async function waitForEditTextarea(mesEl, timeoutMs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const ta = getCurrentEditTextarea();
+      if (ta) return ta;
+
+      // 兼容极少数情况下编辑器不是 curEditTextarea 的版本：尝试在消息内部找可见 textarea
+      const inner = mesEl?.querySelector?.('textarea');
+      if (inner && isElementVisible(inner)) return inner;
+
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(50);
+    }
+    return null;
+  }
+
+  function clickMessageEditButton(mesEl) {
+    if (!mesEl) return false;
+
+    // 优先点击 .mes_edit
+    const direct = mesEl.querySelector('.mes_edit');
+    if (direct) {
+      direct.click();
+      return true;
+    }
+
+    for (const sel of QUICK_EDIT.EDIT_BUTTON_SELECTORS) {
+      const node = mesEl.querySelector(sel);
+      if (!node) continue;
+      const clickable = node.closest?.('.mes_edit, button, .menu_button, div') || node;
+      if (clickable && typeof clickable.click === 'function') {
+        clickable.click();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function clickMessageDoneButton(mesEl) {
+    const done = mesEl?.querySelector?.(QUICK_EDIT.DONE_BUTTON_SELECTOR);
+    if (done && typeof done.click === 'function') {
+      done.click();
+      return true;
+    }
+    return false;
+  }
+
+  function detachQuickEditOutsideListener() {
+    try {
+      quickEditState?.detachOutside?.();
+    } catch {
+      /* ignore */
+    }
+    if (quickEditState) quickEditState.detachOutside = null;
+  }
+
+  function clearQuickEditState() {
+    detachQuickEditOutsideListener();
+    try {
+      if (quickEditState?.monitorTimer) {
+        clearInterval(quickEditState.monitorTimer);
+      }
+    } catch {
+      /* ignore */
+    }
+    quickEditState = null;
+    const root = document.getElementById(ROOT_ID);
+    if (root) updateQuickEditButton(root);
+  }
+
+  function attachQuickEditOutsideListener() {
+    if (!quickEditState) return;
+    detachQuickEditOutsideListener();
+
+    const onPointerDown = (e) => {
+      if (!quickEditState) return;
+
+      const root = document.getElementById(ROOT_ID);
+      if (root && root.contains(e.target)) return;
+
+      const mesEl = document.querySelector(`#chat .mes[mesid="${quickEditState.mesId}"]`);
+      if (mesEl && mesEl.contains(e.target)) return;
+
+      // 点击在编辑 textarea 上也不触发保存
+      const ta = getCurrentEditTextarea();
+      if (ta && ta.contains(e.target)) return;
+
+      // 其他地方：自动保存
+      void quickEditSave();
+    };
+
+    document.addEventListener('pointerdown', onPointerDown, true);
+    quickEditState.detachOutside = () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }
+
+  let quickEditBusy = false;
+
+  async function quickEditOpen() {
+    if (quickEditBusy) return false;
+    quickEditBusy = true;
+    try {
+      if (pinMode) {
+        toastWarn('当前处于收藏点选模式，已退出点选模式后再编辑。');
+        setPinMode(false);
+      }
+
+      const scrollEl = getChatScrollElement();
+      const scrollTop = scrollEl ? scrollEl.scrollTop : null;
+
+      // 1) 优先：选中的消息
+      const selectionInfo = getSelectionInfo();
+      const targetMesId = selectionInfo?.mesId ?? getAnchorMesId();
+
+      if (targetMesId == null) {
+        toastWarn('未找到可编辑的楼层。');
+        return false;
+      }
+
+      // 2) 让虚拟滚动加载目标消息
+      await trySlashChatJump(targetMesId);
+      const mesEl = await waitForMessageElement(targetMesId, 2000);
+      if (!mesEl) {
+        toastWarn('未能找到目标楼层（可能被虚拟滚动隐藏），请稍后重试。');
+        return false;
+      }
+
+      // 3) 记录选中上下文（用于 textarea 内高亮定位）
+      let selectionCtx = null;
+      if (selectionInfo?.mesId === targetMesId) selectionCtx = selectionInfo.selectionCtx;
+      if (!selectionCtx) {
+        const textContainer = getMessageTextContainer(mesEl);
+        selectionCtx = textContainer ? getSelectionContextInElement(textContainer, { win: window, doc: document }) : null;
+      }
+
+      // 4) 调整视口位置（避免编辑器跑到屏幕外）
+      mesEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+      scrollMessageToComfortPosition(mesEl);
+
+      // 5) 打开编辑器
+      if (!clickMessageEditButton(mesEl)) {
+        toastWarn('未找到该楼层的编辑按钮（.mes_edit）。');
+        return false;
+      }
+
+      const textarea = await waitForEditTextarea(mesEl, 5000);
+      if (!textarea) {
+        toastWarn('编辑器未出现（超时），请稍后重试。');
+        return false;
+      }
+
+      // 6) 在编辑器中高亮定位（改进点：使用“前后上下文”+“模糊匹配”）
+      if (selectionCtx?.selectedText?.trim()) {
+        const raw = textarea.value;
+        const ctxRaw = getRawMessageTextFromContext(targetMesId);
+
+        const match = computeBestMatchForTextarea(raw, ctxRaw, selectionCtx);
+
+        if (match) {
+          textarea.focus();
+          textarea.setSelectionRange(match.start, match.end);
+          scrollTextareaToSelection(textarea);
+        } else {
+          // 找不到也没关系：至少打开编辑器并聚焦
+          textarea.focus();
+          textarea.scrollTop = 0;
+          toastInfo('已打开编辑器，但未能在原文中匹配到你选中的显示文本（可能被正则/HTML 渲染改写）。可尝试重新选择更长的片段/包含前后更多文字。');
+        }
+      } else {
+        textarea.focus();
+        textarea.scrollTop = 0;
+      }
+
+      quickEditState = {
+        mesId: targetMesId,
+        scrollTop,
+        scrollEl,
+        selectionCtx,
+        detachOutside: null,
+        monitorTimer: null,
+      };
+
+      attachQuickEditOutsideListener();
+
+      // 监控：如果用户用酒馆自带按钮关闭编辑器，也要同步清状态
+      quickEditState.monitorTimer = setInterval(() => {
+        if (!quickEditState) return;
+        if (!getCurrentEditTextarea()) {
+          const st = quickEditState;
+          clearQuickEditState();
+          // 用户可能点了酒馆自带“完成”按钮：同样归位
+          if (st?.scrollEl && typeof st.scrollTop === 'number' && Number.isFinite(st.scrollTop)) {
+            try {
+              st.scrollEl.scrollTo({ top: st.scrollTop, behavior: 'auto' });
+            } catch {
+              st.scrollEl.scrollTop = st.scrollTop;
+            }
+          }
+        }
+      }, 400);
+
+      const root = document.getElementById(ROOT_ID);
+      if (root) updateQuickEditButton(root);
+
+      return true;
+    } finally {
+      quickEditBusy = false;
+    }
+  }
+
+  async function quickEditSave() {
+    if (quickEditBusy) return false;
+    if (!quickEditState) return false;
+    quickEditBusy = true;
+    try {
+      const mesEl = document.querySelector(`#chat .mes[mesid="${quickEditState.mesId}"]`);
+      if (!mesEl) {
+        clearQuickEditState();
+        return false;
+      }
+
+      if (!clickMessageDoneButton(mesEl)) {
+        // 可能编辑器已被用户关闭
+        clearQuickEditState();
+        return false;
+      }
+
+      const scrollEl = quickEditState.scrollEl;
+      const restoreTop = quickEditState.scrollTop;
+
+      // 等待编辑器关闭后再“归位”，避免被酒馆的 DOM 更新打断
+      const start = Date.now();
+      while (Date.now() - start < 2000) {
+        if (!getCurrentEditTextarea()) break;
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(50);
+      }
+
+      clearQuickEditState();
+
+      if (scrollEl && typeof restoreTop === 'number' && Number.isFinite(restoreTop)) {
+        try {
+          scrollEl.scrollTo({ top: restoreTop, behavior: 'auto' });
+        } catch {
+          scrollEl.scrollTop = restoreTop;
+        }
+      }
+
+      return true;
+    } finally {
+      quickEditBusy = false;
+    }
+  }
+
+  async function handleQuickEditAction() {
+    // 二段式：未在编辑 -> 打开；已在编辑 -> 保存
+    if (quickEditState && getCurrentEditTextarea()) {
+      return quickEditSave();
+    }
+    return quickEditOpen();
+  }
+
   function formatRangeText(range) {
     if (!range) return '-';
     return `${range.start}-${range.end}`;
@@ -588,6 +1437,10 @@
         const anchor = getAnchorMesId();
         return jumpToMessage(anchor, 'end');
       }
+
+      // ✏️ 快速编辑（选中内容可高亮定位）
+      case 'quickEdit':
+        return handleQuickEditAction();
 
       default:
         return;
@@ -945,6 +1798,7 @@
     setPinMode(false);
     setFavPanelOpen(false);
     setActiveRange(null);
+    clearQuickEditState();
 
     const root = document.getElementById(ROOT_ID);
     if (root) updateFavoritesUI(root);
@@ -1323,6 +2177,7 @@
       <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）"></div>
       <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">${ICONS.head}</div>
       <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">${ICONS.tail}</div>
+      <div class="stcj-btn" data-action="quickEdit" title="快速编辑：选中文字可高亮定位；无选中则编辑当前楼层">${ICONS.pencil}</div>
 
       <div class="stcj-pin-group">
         <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${ICONS.pin}</div>
@@ -1351,6 +2206,7 @@
     updateFavPanelToggleButton(root);
     updateFavoritesUI(root);
     updateRangeButtons(root);
+    updateQuickEditButton(root);
 
     // 初始位置
     applyRootPositionFromSettings(root);
@@ -1401,6 +2257,21 @@
 
       try {
         detachPinPickListeners();
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        clearQuickEditState();
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        if (quickEditMirror && quickEditMirror.parentNode) {
+          quickEditMirror.parentNode.removeChild(quickEditMirror);
+        }
+        quickEditMirror = null;
       } catch {
         /* ignore */
       }
