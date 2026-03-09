@@ -203,13 +203,111 @@
     // SillyTavern 通常使用 SimpleBar：真正可滚动的视口是 #chat 的祖先 .simplebar-content-wrapper
     // 之前用 chat.querySelector 会找不到（因为 wrapper 通常在 #chat 外层），导致滚动/定位基准不稳定。
     const wrapper = chat.closest('.simplebar-content-wrapper');
-    if (wrapper) return wrapper;
+    if (wrapper) {
+      // 防止“滚动链”把滚动/定位传递给页面本身（某些浏览器/触控板下会导致整个页面上移露出灰底）
+      try {
+        wrapper.style.overscrollBehavior = 'contain';
+      } catch {
+        /* ignore */
+      }
+      return wrapper;
+    }
 
     // 极少数布局可能把 wrapper 放在 #chat 内部，做一层兜底
     const inner = chat.querySelector?.('.simplebar-content-wrapper');
-    if (inner) return inner;
+    if (inner) {
+      try {
+        inner.style.overscrollBehavior = 'contain';
+      } catch {
+        /* ignore */
+      }
+      return inner;
+    }
 
     return chat;
+  }
+
+  function captureWindowScroll() {
+    try {
+      const se = document.scrollingElement || document.documentElement;
+      return {
+        x: (typeof window.scrollX === 'number' ? window.scrollX : se.scrollLeft) || 0,
+        y: (typeof window.scrollY === 'number' ? window.scrollY : se.scrollTop) || 0,
+      };
+    } catch {
+      return { x: 0, y: 0 };
+    }
+  }
+
+  /**
+   * 恢复窗口滚动位置。
+   * - 该插件只应该滚动聊天视口（SimpleBar wrapper），不应该让 window 本身滚动。
+   * - 但 ST 内置的 chat-jump/某些浏览器的 scrollIntoView 有时会误滚动 window，导致页面“上移”露出灰色不可点区域。
+   */
+  function restoreWindowScroll(pos) {
+    if (!pos) return;
+    try {
+      const se = document.scrollingElement || document.documentElement;
+      const curX = (typeof window.scrollX === 'number' ? window.scrollX : se.scrollLeft) || 0;
+      const curY = (typeof window.scrollY === 'number' ? window.scrollY : se.scrollTop) || 0;
+      if (curX === pos.x && curY === pos.y) return;
+
+      // 用 auto 立刻纠正，避免与 smooth 动画互相“拉扯”
+      window.scrollTo({ left: pos.x, top: pos.y, behavior: 'auto' });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * 某些情况下（尤其是虚拟滚动/延迟渲染）window 的滚动会在稍后才被修改。
+   * 这里做一次“稳定化恢复”，在下一帧和稍后再补一次纠正。
+   */
+  function restoreWindowScrollStable(pos) {
+    restoreWindowScroll(pos);
+    try {
+      requestAnimationFrame(() => restoreWindowScroll(pos));
+    } catch {
+      /* ignore */
+    }
+    try {
+      setTimeout(() => restoreWindowScroll(pos), 80);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * 只滚动聊天滚动容器，不使用 scrollIntoView（它可能会连带滚动 window）。
+   * @param {HTMLElement} mesEl
+   * @param {'start'|'end'} block
+   * @param {'auto'|'smooth'} behavior
+   */
+  function scrollMessageInChat(mesEl, block, behavior = 'smooth') {
+    const scrollEl = getChatScrollElement();
+    if (!mesEl || !scrollEl) return false;
+
+    try {
+      const vp = scrollEl.getBoundingClientRect();
+      const rect = mesEl.getBoundingClientRect();
+
+      let targetTop = scrollEl.scrollTop;
+      if (block === 'end') targetTop += rect.bottom - vp.bottom;
+      else targetTop += rect.top - vp.top;
+
+      const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      targetTop = clamp(targetTop, 0, max);
+
+      if (typeof scrollEl.scrollTo === 'function') {
+        scrollEl.scrollTo({ top: targetTop, behavior });
+      } else {
+        scrollEl.scrollTop = targetTop;
+      }
+      return true;
+    } catch (e) {
+      log('scrollMessageInChat failed', e);
+      return false;
+    }
   }
 
   function getLastMessageId() {
@@ -349,16 +447,22 @@
     const scrollEl = getChatScrollElement();
     if (!chat || !scrollEl) return false;
 
+    const winPos = captureWindowScroll();
+
     const lastId = getLastMessageId();
     const targetId = clamp(mesId, 0, lastId);
 
     // 先尝试用 chat-jump 让虚拟滚动加载目标消息（这一步通常会把目标滚到中间）
     await trySlashChatJump(targetId);
 
-    // 再等待 DOM 出现后，用 scrollIntoView 精确对齐到头/尾
+    // 有些情况下 chat-jump/scrollIntoView 会误滚动 window，导致页面上移出现灰底
+    restoreWindowScrollStable(winPos);
+
+    // 再等待 DOM 出现后，精确对齐到头/尾（只滚动聊天容器，不滚动 window）
     const el = await waitForMessageElement(targetId, 2000);
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block });
+      scrollMessageInChat(el, block, 'smooth');
+      restoreWindowScrollStable(winPos);
       flashMessage(el);
       return true;
     }
@@ -366,15 +470,18 @@
     // 兜底：滚动到顶部/底部
     if (targetId <= 0) {
       scrollEl.scrollTo({ top: 0, behavior: 'smooth' });
+      restoreWindowScrollStable(winPos);
       return true;
     }
 
     if (targetId >= lastId) {
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+      restoreWindowScrollStable(winPos);
       return true;
     }
 
     toastWarn('未能定位到目标楼层（可能被虚拟滚动隐藏），请稍后重试。');
+    restoreWindowScrollStable(winPos);
     return false;
   }
 
@@ -1067,6 +1174,8 @@
       const scrollEl = getChatScrollElement();
       const scrollTop = scrollEl ? scrollEl.scrollTop : null;
 
+      const winPos = captureWindowScroll();
+
       // 1) 优先：选中的消息
       const selectionInfo = getSelectionInfo();
       const targetMesId = selectionInfo?.mesId ?? getAnchorMesId();
@@ -1078,6 +1187,7 @@
 
       // 2) 让虚拟滚动加载目标消息
       await trySlashChatJump(targetMesId);
+      restoreWindowScrollStable(winPos);
       const mesEl = await waitForMessageElement(targetMesId, 2000);
       if (!mesEl) {
         toastWarn('未能找到目标楼层（可能被虚拟滚动隐藏），请稍后重试。');
@@ -1093,7 +1203,8 @@
       }
 
       // 4) 调整视口位置（避免编辑器跑到屏幕外）
-      mesEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+      scrollMessageInChat(mesEl, 'start', 'auto');
+      restoreWindowScrollStable(winPos);
       scrollMessageToComfortPosition(mesEl);
 
       // 5) 打开编辑器
