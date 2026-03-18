@@ -542,3 +542,82 @@ body.stcj-pin-mode #chat .mes {
 body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23ff6b6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>') 12 24, pointer;
 }
+
+/* ===== 按钮可见性控制（设置面板） ===== */
+#stcj-root .stcj-settings-hidden {
+  display: none !important;
+}
+
+/* ===== 扩展设置面板（#extensions_settings2 内） ===== */
+
+.stcj-settings-hint {
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+
+.stcj-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stcj-settings-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.15));
+  cursor: default;
+  transition: background-color 0.15s, border-color 0.15s, opacity 0.2s;
+  user-select: none;
+}
+
+.stcj-settings-item:hover {
+  background: var(--SmartThemeBlurTintColor, rgba(40, 40, 40, 0.3));
+}
+
+/* 拖拽手柄 */
+.stcj-settings-drag {
+  cursor: grab;
+  opacity: 0.5;
+  padding: 0 2px;
+  font-size: 14px;
+  transition: opacity 0.15s;
+}
+
+.stcj-settings-drag:hover {
+  opacity: 1;
+}
+
+.stcj-settings-item:active .stcj-settings-drag {
+  cursor: grabbing;
+}
+
+/* 复选框标签 */
+.stcj-settings-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex: 1;
+  font-size: 13px;
+}
+
+.stcj-settings-label input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+/* 拖拽中的元素 */
+.stcj-settings-dragging {
+  opacity: 0.4;
+  border-style: dashed;
+}
+
+/* 拖拽悬停目标 */
+.stcj-settings-dragover {
+  border-color: var(--SmartThemeQuoteColor, rgba(255, 255, 255, 0.4));
+  background: var(--SmartThemeQuoteColor, rgba(80, 80, 80, 0.25));
+}

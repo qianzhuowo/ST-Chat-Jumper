@@ -34,6 +34,108 @@
     collapsed: false,
   };
 
+  // ===== 按钮可见性与排序设置（持久化到 extensionSettings） =====
+  const EXT_SETTINGS_KEY = 'ST-Chat-Jumper';
+
+  /**
+   * 所有可配置按钮的定义。
+   * id: 与 buildUI 中 data-action 或分组 key 对应
+   * label: 设置面板中显示的中文名
+   * group: 如果为 true，表示这是一个按钮组（包含多个 DOM 元素）
+   */
+  const CONFIGURABLE_BUTTONS = [
+    { id: 'toggleCollapse',    label: '收起/展开',          defaultEnabled: true, order: 0 },
+    { id: 'recent3',           label: '最近第3楼',          defaultEnabled: true, order: 1 },
+    { id: 'recent2',           label: '最近第2楼',          defaultEnabled: true, order: 2 },
+    { id: 'recent1',           label: '最近第1楼',          defaultEnabled: true, order: 3 },
+    { id: 'showRange',         label: '显示楼层区间',       defaultEnabled: true, order: 4 },
+    { id: 'toggleOrientation', label: '横/竖布局切换',      defaultEnabled: true, order: 5 },
+    { id: 'prev',              label: '上一楼',             defaultEnabled: true, order: 6 },
+    { id: 'next',              label: '下一楼',             defaultEnabled: true, order: 7 },
+    { id: 'currentHead',       label: '对齐到头部 (H)',     defaultEnabled: true, order: 8 },
+    { id: 'currentTail',       label: '对齐到尾部 (L)',     defaultEnabled: true, order: 9 },
+    { id: 'quickEdit',         label: '快速编辑 (✏️)',      defaultEnabled: true, order: 10 },
+    { id: 'pinGroup',          label: '收藏 (📌)',          defaultEnabled: true, order: 11 },
+  ];
+
+  /**
+   * 获取按钮可见性 & 排序设置（从 extensionSettings 读取，带默认值合并）
+   */
+  function getButtonSettings() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return getDefaultButtonSettings();
+
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = { buttons: getDefaultButtonSettings() };
+      }
+
+      const stored = ctx.extensionSettings[EXT_SETTINGS_KEY].buttons;
+      if (!Array.isArray(stored)) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY].buttons = getDefaultButtonSettings();
+        return ctx.extensionSettings[EXT_SETTINGS_KEY].buttons;
+      }
+
+      // 合并：确保新增按钮有默认值，移除已删除按钮
+      const validIds = new Set(CONFIGURABLE_BUTTONS.map(b => b.id));
+      const result = [];
+      const seenIds = new Set();
+
+      // 保留已有配置（按 stored 的顺序）
+      for (const item of stored) {
+        if (validIds.has(item.id) && !seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          result.push({
+            id: item.id,
+            enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+            order: typeof item.order === 'number' ? item.order : result.length,
+          });
+        }
+      }
+
+      // 补充新增的按钮（append 到末尾）
+      for (const def of CONFIGURABLE_BUTTONS) {
+        if (!seenIds.has(def.id)) {
+          result.push({ id: def.id, enabled: def.defaultEnabled, order: result.length });
+        }
+      }
+
+      ctx.extensionSettings[EXT_SETTINGS_KEY].buttons = result;
+      return result;
+    } catch {
+      return getDefaultButtonSettings();
+    }
+  }
+
+  function getDefaultButtonSettings() {
+    return CONFIGURABLE_BUTTONS.map(b => ({
+      id: b.id,
+      enabled: b.defaultEnabled,
+      order: b.order,
+    }));
+  }
+
+  function saveButtonSettings(buttons) {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return;
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = {};
+      }
+      ctx.extensionSettings[EXT_SETTINGS_KEY].buttons = buttons;
+      ctx.saveSettingsDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function isButtonEnabled(buttonId) {
+    const buttons = getButtonSettings();
+    const cfg = buttons.find(b => b.id === buttonId);
+    return cfg ? cfg.enabled : true;
+  }
+
+
   /** @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean}} */
   let settings = loadSettings();
 
@@ -2259,6 +2361,267 @@
         if (!action) return;
 
         await handleAction(action);
+
+      });
+    });
+  }
+
+
+  // ===== 设置面板 & 按钮布局管理 =====
+
+  /**
+   * 按钮 ID → DOM 选择器 的映射。
+   * 用于在 #stcj-root 中定位对应的 DOM 元素。
+   */
+  const BUTTON_DOM_MAP = {
+    toggleCollapse:    '.stcj-btn[data-action="toggleCollapse"]',
+    recent3:           '.stcj-btn[data-action="recent3"]',
+    recent2:           '.stcj-btn[data-action="recent2"]',
+    recent1:           '.stcj-btn[data-action="recent1"]',
+    showRange:         '.stcj-btn[data-action="showRange"]',
+    toggleOrientation: '.stcj-btn[data-action="toggleOrientation"]',
+    prev:              '.stcj-btn[data-action="prev"]',
+    next:              '.stcj-btn[data-action="next"]',
+    currentHead:       '.stcj-btn[data-action="currentHead"]',
+    currentTail:       '.stcj-btn[data-action="currentTail"]',
+    quickEdit:         '.stcj-btn[data-action="quickEdit"]',
+    pinGroup:          '.stcj-pin-group',
+  };
+
+  /**
+   * 根据当前设置，调整 #stcj-root 内按钮的可见性和顺序。
+   * - 不可见的按钮添加 stcj-settings-hidden class
+   * - 按 order 重新排列 DOM 子元素
+   * - 拖拽手柄 (.stcj-handle) 和收藏面板 (.stcj-fav-panel) 始终保持固定位置
+   */
+  function refreshButtonLayout() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+
+    const buttonsCfg = getButtonSettings();
+    const cfgMap = new Map(buttonsCfg.map(b => [b.id, b]));
+
+    // showRange 关联的额外元素（resetRange 按钮 + rangeChip 指示器）
+    const RANGE_GROUP_EXTRA = [
+      '.stcj-btn[data-action="resetRange"]',
+      '.stcj-range-chip',
+    ];
+
+    // 1) 应用可见性
+    for (const [btnId, selector] of Object.entries(BUTTON_DOM_MAP)) {
+      const el = root.querySelector(selector);
+      if (!el) continue;
+      const cfg = cfgMap.get(btnId);
+      const enabled = cfg ? cfg.enabled : true;
+      el.classList.toggle('stcj-settings-hidden', !enabled);
+
+      // showRange 同时控制关联元素
+      if (btnId === 'showRange') {
+        for (const extraSel of RANGE_GROUP_EXTRA) {
+          const extraEl = root.querySelector(extraSel);
+          if (extraEl) extraEl.classList.toggle('stcj-settings-hidden', !enabled);
+        }
+      }
+    }
+
+    // 2) 按 order 排序：收集所有可排序的元素
+    const handle = root.querySelector('.stcj-handle');
+    const favPanel = root.querySelector('.stcj-fav-panel');
+
+    // 获取排序后的按钮 ID 列表
+    const sortedCfg = [...buttonsCfg].sort((a, b) => a.order - b.order);
+
+    // 收集需要排序的元素
+    const sortableElements = [];
+    for (const cfg of sortedCfg) {
+      const selector = BUTTON_DOM_MAP[cfg.id];
+      if (!selector) continue;
+      const el = root.querySelector(selector);
+      if (el) sortableElements.push(el);
+
+      // showRange：将关联元素紧跟其后
+      if (cfg.id === 'showRange') {
+        for (const extraSel of RANGE_GROUP_EXTRA) {
+          const extraEl = root.querySelector(extraSel);
+          if (extraEl) sortableElements.push(extraEl);
+        }
+      }
+    }
+
+    // 3) 重新插入：handle 始终在最前，然后是排序后的按钮，最后是 favPanel
+    // 先移除所有可排序元素（不移除 handle 和 favPanel）
+    for (const el of sortableElements) {
+      if (el.parentNode === root) root.removeChild(el);
+    }
+
+    // 在 favPanel 之前插入排序后的按钮（如果 favPanel 存在）
+    const insertBefore = favPanel || null;
+    for (const el of sortableElements) {
+      root.insertBefore(el, insertBefore);
+    }
+  }
+
+  /**
+   * 获取按钮的标签（显示名称）
+   */
+  function getButtonLabel(btnId) {
+    const def = CONFIGURABLE_BUTTONS.find(b => b.id === btnId);
+    return def ? def.label : btnId;
+  }
+
+  /**
+   * 在 #extensions_settings2 中挂载设置面板
+   */
+  function mountSettingsPanel() {
+    const PANEL_ID = 'stcj-settings-panel';
+
+    // 防重复
+    if (document.getElementById(PANEL_ID)) return;
+
+    const container = document.getElementById('extensions_settings2');
+    if (!container) {
+      log('未找到 #extensions_settings2，设置面板未挂载');
+      return;
+    }
+
+    const html = `
+      <div id="${PANEL_ID}" class="stcj-ext-settings">
+        <div class="inline-drawer">
+          <div class="inline-drawer-toggle inline-drawer-header">
+            <b>ST Chat Jumper</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+          </div>
+          <div class="inline-drawer-content">
+            <div class="stcj-settings-hint">
+              <small>勾选以显示/隐藏按钮，拖拽 <i class="fa-solid fa-grip-vertical"></i> 调整按钮顺序。</small>
+            </div>
+            <div id="stcj-settings-button-list" class="stcj-settings-list">
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    container.insertAdjacentHTML('beforeend', html);
+    renderSettingsButtonList();
+    log('设置面板已挂载到 #extensions_settings2');
+  }
+
+  /**
+   * 渲染设置面板中的按钮列表（含复选框 + 拖拽排序）
+   */
+  function renderSettingsButtonList() {
+    const listEl = document.getElementById('stcj-settings-button-list');
+    if (!listEl) return;
+
+    const buttonsCfg = getButtonSettings();
+    const sorted = [...buttonsCfg].sort((a, b) => a.order - b.order);
+
+    listEl.innerHTML = '';
+
+    for (const cfg of sorted) {
+      const label = getButtonLabel(cfg.id);
+
+      const item = document.createElement('div');
+      item.className = 'stcj-settings-item';
+      item.draggable = true;
+      item.dataset.btnId = cfg.id;
+
+      item.innerHTML = `
+        <span class="stcj-settings-drag" title="拖拽排序">
+          <i class="fa-solid fa-grip-vertical"></i>
+        </span>
+        <label class="stcj-settings-label">
+          <input type="checkbox" class="stcj-settings-check" data-btn-id="${cfg.id}" ${cfg.enabled ? 'checked' : ''} />
+          <span>${label}</span>
+        </label>
+      `;
+
+      listEl.appendChild(item);
+    }
+
+    // 绑定复选框事件
+    listEl.querySelectorAll('.stcj-settings-check').forEach(checkbox => {
+      checkbox.addEventListener('change', (e) => {
+        const btnId = e.target.dataset.btnId;
+        const buttons = getButtonSettings();
+        const cfg = buttons.find(b => b.id === btnId);
+        if (cfg) {
+          cfg.enabled = e.target.checked;
+          saveButtonSettings(buttons);
+          refreshButtonLayout();
+        }
+      });
+    });
+
+    // 绑定拖拽排序
+    initSettingsDragDrop(listEl);
+  }
+
+  /**
+   * 设置面板的拖拽排序
+   */
+  function initSettingsDragDrop(listEl) {
+    let draggedItem = null;
+
+    listEl.querySelectorAll('.stcj-settings-item').forEach(item => {
+      item.addEventListener('dragstart', (e) => {
+        draggedItem = item;
+        item.classList.add('stcj-settings-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', item.dataset.btnId);
+      });
+
+      item.addEventListener('dragend', () => {
+        if (draggedItem) draggedItem.classList.remove('stcj-settings-dragging');
+        draggedItem = null;
+        listEl.querySelectorAll('.stcj-settings-item').forEach(i => {
+          i.classList.remove('stcj-settings-dragover');
+        });
+      });
+
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (item === draggedItem) return;
+
+        listEl.querySelectorAll('.stcj-settings-item').forEach(i => {
+          i.classList.remove('stcj-settings-dragover');
+        });
+        item.classList.add('stcj-settings-dragover');
+      });
+
+      item.addEventListener('dragleave', () => {
+        item.classList.remove('stcj-settings-dragover');
+      });
+
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        item.classList.remove('stcj-settings-dragover');
+        if (!draggedItem || item === draggedItem) return;
+
+        // DOM 重排
+        const allItems = [...listEl.querySelectorAll('.stcj-settings-item')];
+        const draggedIdx = allItems.indexOf(draggedItem);
+        const targetIdx = allItems.indexOf(item);
+
+        if (draggedIdx < targetIdx) {
+          listEl.insertBefore(draggedItem, item.nextSibling);
+        } else {
+          listEl.insertBefore(draggedItem, item);
+        }
+
+        // 更新 order 并保存
+        const buttons = getButtonSettings();
+        const items = listEl.querySelectorAll('.stcj-settings-item');
+        items.forEach((el, index) => {
+          const id = el.dataset.btnId;
+          const cfg = buttons.find(b => b.id === id);
+          if (cfg) cfg.order = index;
+        });
+
+        saveButtonSettings(buttons);
+        refreshButtonLayout();
       });
     });
   }
@@ -2402,6 +2765,12 @@
         /* ignore */
       }
     };
+
+    // 应用按钮可见性与排序
+    refreshButtonLayout();
+
+    // 挂载扩展设置面板
+    mountSettingsPanel();
 
     log('UI 已注入');
   }
