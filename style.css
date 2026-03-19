@@ -621,3 +621,24 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   border-color: var(--SmartThemeQuoteColor, rgba(255, 255, 255, 0.4));
   background: var(--SmartThemeQuoteColor, rgba(80, 80, 80, 0.25));
 }
+
+/* ===== 一键隐藏悬浮条 ===== */
+#stcj-root.stcj-global-hidden {
+  display: none !important;
+}
+
+/* 设置面板中的一键隐藏按钮 */
+.stcj-settings-global-toggle {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+}
+
+.stcj-settings-global-toggle .menu_button {
+  width: 100%;
+  text-align: center;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}

@@ -149,6 +149,7 @@
   let favoriteMesIds = [];
   let favPanelOpen = false;
   let pinMode = false;
+  let globalHidden = false;
 
   // ===== 快速编辑（铅笔） =====
   /** @type {null|{mesId:number, scrollTop:number|null, scrollEl:HTMLElement|null, selectionCtx:null|{selectedText:string,before:string,after:string,displayText:string,start:number,end:number}, detachOutside: null|(() => void), monitorTimer:number|null}} */
@@ -2258,6 +2259,58 @@
     setCollapsed(!settings.collapsed);
   }
 
+  function loadGlobalHidden() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return false;
+      const ext = ctx.extensionSettings[EXT_SETTINGS_KEY];
+      if (ext && typeof ext.globalHidden === 'boolean') {
+        return ext.globalHidden;
+      }
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+
+  function saveGlobalHidden(hidden) {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return;
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = {};
+      }
+      ctx.extensionSettings[EXT_SETTINGS_KEY].globalHidden = !!hidden;
+      ctx.saveSettingsDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleGlobalHide() {
+    globalHidden = !globalHidden;
+
+    saveGlobalHidden(globalHidden);
+
+    const root = document.getElementById(ROOT_ID);
+    if (root) {
+      root.classList.toggle('stcj-global-hidden', globalHidden);
+    }
+
+    // 更新设置面板中的按钮文本
+    const btn = document.getElementById('stcj-global-hide-btn');
+    if (btn) {
+      btn.textContent = globalHidden ? '显示悬浮条' : '一键隐藏悬浮条';
+      btn.title = globalHidden
+        ? '点击恢复 ST Chat Jumper 悬浮跳转条'
+        : '点击一键隐藏 ST Chat Jumper 悬浮跳转条（不影响按钮显隐设置）';
+    }
+
+    if (globalHidden) {
+      toastInfo('ST Chat Jumper 悬浮条已隐藏，可在扩展设置中恢复');
+    }
+  }
+
   function attachDrag(root) {
     const handle = root.querySelector('.stcj-handle');
     if (!handle) return;
@@ -2492,6 +2545,11 @@
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
           </div>
           <div class="inline-drawer-content">
+            <div class="stcj-settings-global-toggle">
+              <button id="stcj-global-hide-btn" class="menu_button" title="点击一键隐藏 ST Chat Jumper 悬浮跳转条（不影响按钮显隐设置）">
+                一键隐藏悬浮条
+              </button>
+            </div>
             <div class="stcj-settings-hint">
               <small>勾选以显示/隐藏按钮，拖拽 <i class="fa-solid fa-grip-vertical"></i> 调整按钮顺序。</small>
             </div>
@@ -2504,6 +2562,18 @@
 
     container.insertAdjacentHTML('beforeend', html);
     renderSettingsButtonList();
+
+    // 绑定一键隐藏按钮
+    const globalHideBtn = document.getElementById('stcj-global-hide-btn');
+    if (globalHideBtn) {
+      globalHideBtn.addEventListener('click', toggleGlobalHide);
+      // 恢复按钮文本（如果之前已经隐藏）
+      if (globalHidden) {
+        globalHideBtn.textContent = '显示悬浮条';
+        globalHideBtn.title = '点击恢复 ST Chat Jumper 悬浮跳转条';
+      }
+    }
+
     log('设置面板已挂载到 #extensions_settings2');
   }
 
@@ -2768,6 +2838,10 @@
 
     // 应用按钮可见性与排序
     refreshButtonLayout();
+
+    // 恢复全局隐藏状态
+    globalHidden = loadGlobalHidden();
+    root.classList.toggle('stcj-global-hidden', globalHidden);
 
     // 挂载扩展设置面板
     mountSettingsPanel();
