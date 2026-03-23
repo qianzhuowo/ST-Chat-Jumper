@@ -2,10 +2,12 @@
  * ST Chat Jumper
  * - 悬浮可拖拽
  * - 横/竖布局（按钮切换）
- * - 快速跳转：最近3楼、上一楼（头部）、下一楼（头部）
+ * - 快速跳转：最近3楼、快速翻页（左/右）、上一楼（头部）、下一楼（头部）
  * - H/L：对齐“当前楼层”的头部/尾部（用于精确定位）
  * - 显示楼层区间 / 恢复默认视图
  * - 临时收藏列表
+ * - 定位编辑楼层内容
+ * - 快速左/右翻页
  */
 
 (function () {
@@ -18,12 +20,17 @@
 
   /** @type {'horizontal'|'vertical'} */
   const DEFAULT_ORIENTATION = 'vertical';
+  const DEFAULT_SCALE = 1;
+  const MIN_SCALE = 0.5;
+  const MAX_SCALE = 1.5;
+  const SCALE_STEP = 0.01;
 
   /**
    * x/y: 兼容旧版本的像素坐标（仍会写入，方便调试）
    * rx/ry: 相对位置（0~1），用于窗口尺寸变化时保持相对位置
    * collapsed: 是否收起按钮栏（仅保留拖拽手柄+收起按钮）
-   * @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean}}
+   * scale: 悬浮条缩放倍数
+   * @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number}}
    */
   const DEFAULT_SETTINGS = {
     x: null,
@@ -32,6 +39,7 @@
     ry: null,
     orientation: DEFAULT_ORIENTATION,
     collapsed: false,
+    scale: DEFAULT_SCALE,
   };
 
   // ===== 按钮可见性与排序设置（持久化到 extensionSettings） =====
@@ -48,14 +56,16 @@
     { id: 'recent3',           label: '最近第3楼',          defaultEnabled: true, order: 1 },
     { id: 'recent2',           label: '最近第2楼',          defaultEnabled: true, order: 2 },
     { id: 'recent1',           label: '最近第1楼',          defaultEnabled: true, order: 3 },
-    { id: 'showRange',         label: '显示楼层区间',       defaultEnabled: true, order: 4 },
-    { id: 'toggleOrientation', label: '横/竖布局切换',      defaultEnabled: true, order: 5 },
-    { id: 'prev',              label: '上一楼',             defaultEnabled: true, order: 6 },
-    { id: 'next',              label: '下一楼',             defaultEnabled: true, order: 7 },
-    { id: 'currentHead',       label: '对齐到头部 (H)',     defaultEnabled: true, order: 8 },
-    { id: 'currentTail',       label: '对齐到尾部 (L)',     defaultEnabled: true, order: 9 },
-    { id: 'quickEdit',         label: '快速编辑 (✏️)',      defaultEnabled: true, order: 10 },
-    { id: 'pinGroup',          label: '收藏 (📌)',          defaultEnabled: true, order: 11 },
+    { id: 'quickPage',         label: '快速翻页(右)',       defaultEnabled: true, order: 4 },
+    { id: 'quickPageLeft',     label: '快速翻页(左)',       defaultEnabled: true, order: 5 },
+    { id: 'showRange',         label: '显示楼层区间',       defaultEnabled: true, order: 6 },
+    { id: 'toggleOrientation', label: '横/竖布局切换',      defaultEnabled: true, order: 7 },
+    { id: 'prev',              label: '上一楼',             defaultEnabled: true, order: 8 },
+    { id: 'next',              label: '下一楼',             defaultEnabled: true, order: 9 },
+    { id: 'currentHead',       label: '对齐到头部 (H)',     defaultEnabled: true, order: 10 },
+    { id: 'currentTail',       label: '对齐到尾部 (L)',     defaultEnabled: true, order: 11 },
+    { id: 'quickEdit',         label: '快速编辑 (✏️)',      defaultEnabled: true, order: 12 },
+    { id: 'pinGroup',          label: '收藏 (📌)',          defaultEnabled: true, order: 13 },
   ];
 
   /**
@@ -136,7 +146,7 @@
   }
 
 
-  /** @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean}} */
+  /** @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number}} */
   let settings = loadSettings();
 
   let isDragging = false;
@@ -183,6 +193,8 @@
     chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>',
     chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>',
     chevronRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>',
+    fastBackward: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="19 6 13 12 19 18"></polyline><polyline points="11 6 5 12 11 18"></polyline></svg>',
+    fastForward: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 6 11 12 5 18"></polyline><polyline points="13 6 19 12 13 18"></polyline></svg>',
     head: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7M5 5h14"/></svg>',
     tail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7M5 19h14"/></svg>',
     pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>',
@@ -263,6 +275,7 @@
       const rx = typeof parsed.rx === 'number' && Number.isFinite(parsed.rx) ? clamp(parsed.rx, 0, 1) : null;
       const ry = typeof parsed.ry === 'number' && Number.isFinite(parsed.ry) ? clamp(parsed.ry, 0, 1) : null;
       const collapsed = typeof parsed.collapsed === 'boolean' ? parsed.collapsed : DEFAULT_SETTINGS.collapsed;
+      const scale = normalizeRootScale(parsed.scale);
 
       return {
         ...DEFAULT_SETTINGS,
@@ -273,6 +286,7 @@
         ry,
         orientation,
         collapsed,
+        scale,
       };
     } catch {
       return { ...DEFAULT_SETTINGS };
@@ -289,6 +303,25 @@
 
   function clamp(n, min, max) {
     return Math.max(min, Math.min(max, n));
+  }
+
+  function normalizeRootScale(value) {
+    const scale = Number(value);
+    if (!Number.isFinite(scale)) return DEFAULT_SCALE;
+    return clamp(scale, MIN_SCALE, MAX_SCALE);
+  }
+
+  function getRootScalePercent(value = settings.scale) {
+    return Math.round(normalizeRootScale(value) * 100);
+  }
+
+  function formatRootScalePercent(value = settings.scale) {
+    return `${getRootScalePercent(value)}%`;
+  }
+
+  function getRootScaleSliderProgress(value = settings.scale) {
+    const percent = getRootScalePercent(value);
+    return clamp(((percent - MIN_SCALE * 100) / ((MAX_SCALE - MIN_SCALE) * 100)) * 100, 0, 100);
   }
 
   function sleep(ms) {
@@ -440,6 +473,68 @@
     }
 
     return 0;
+  }
+
+  function getLatestMessageElement() {
+    const lastMes = document.querySelector('#chat .mes.last_mes[mesid]');
+    if (lastMes) return lastMes;
+
+    const nodes = document.querySelectorAll('#chat .mes[mesid]');
+    return nodes.length ? nodes[nodes.length - 1] : null;
+  }
+
+  function triggerElementClick(el) {
+    if (!el) return false;
+    try {
+      if (typeof el.click === 'function') {
+        el.click();
+        return true;
+      }
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      return true;
+    } catch (e) {
+      log('触发点击失败', e);
+      return false;
+    }
+  }
+
+  async function quickFlipLatestMessagePage(direction = 'right') {
+    const isLeft = direction === 'left';
+    const selectorBase = isLeft ? '.swipe_left' : '.swipe_right';
+    const directionText = isLeft ? '左' : '右';
+    const pageDirectionText = isLeft ? '上一' : '下一';
+    const lastId = getLastMessageId();
+    if (!Number.isFinite(lastId) || lastId < 0) {
+      toastWarn('未找到最新楼层。');
+      return false;
+    }
+
+    let mesEl = getLatestMessageElement();
+    const mesId = mesEl ? parseInt(mesEl.getAttribute('mesid') || '', 10) : NaN;
+
+    if (!mesEl || Number.isNaN(mesId) || mesId !== lastId) {
+      const winPos = captureWindowScroll();
+      await trySlashChatJump(lastId);
+      restoreWindowScrollStable(winPos);
+      mesEl = await waitForMessageElement(lastId, 2000);
+    }
+
+    const flipBtn =
+      mesEl?.querySelector(`${selectorBase}.fa-solid.interactable[role="button"]`) ||
+      mesEl?.querySelector(`${selectorBase}.interactable[role="button"]`) ||
+      mesEl?.querySelector(selectorBase);
+
+    if (!flipBtn) {
+      toastWarn(`最新楼层没有可用的${directionText}翻页按钮。`);
+      return false;
+    }
+
+    if (flipBtn.getAttribute('aria-disabled') === 'true' || flipBtn.classList.contains('disabled')) {
+      toastInfo(`最新楼层当前没有${pageDirectionText}页可翻。`);
+      return false;
+    }
+
+    return triggerElementClick(flipBtn);
   }
 
   /**
@@ -598,7 +693,7 @@
     TEXT_CONTAINER_SELECTORS: ['.mes_text', '.mes_text_inner', '.mes_text_block'],
     EDIT_TEXTAREA_SELECTOR: '#curEditTextarea',
     SCROLL_INTO_VIEW_OFFSET: 120,
-    EDITOR_SCROLL_ALIGNMENT_RATIO: 0.3,
+    EDITOR_SCROLL_ALIGNMENT_RATIO: 0.5,
   };
 
   function isElementVisible(el) {
@@ -1120,10 +1215,21 @@
     return div;
   }
 
-  function scrollTextareaToSelection(textarea) {
+  function scrollTextareaToSelection(textarea, rangeStart, rangeEnd) {
     try {
       const mirror = ensureQuickEditMirror(textarea);
       const style = getComputedStyle(textarea);
+      const text = String(textarea.value || '');
+      const fallbackStart = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : 0;
+      const fallbackEnd = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : fallbackStart;
+      const start = clamp(Number.isFinite(rangeStart) ? rangeStart : fallbackStart, 0, text.length);
+      const end = clamp(Number.isFinite(rangeEnd) ? rangeEnd : fallbackEnd, start, text.length);
+      const anchor = end > start ? Math.floor((start + end) / 2) : end;
+      const lineHeight = parseFloat(style.lineHeight);
+      const fallbackLineHeight = Number.isFinite(lineHeight)
+        ? lineHeight
+        : (parseFloat(style.fontSize) || 16) * 1.4;
+
       mirror.style.width = `${textarea.clientWidth}px`;
       mirror.style.padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
       mirror.style.font = style.font;
@@ -1131,15 +1237,25 @@
       mirror.style.fontFamily = style.fontFamily;
       mirror.style.fontWeight = style.fontWeight;
       mirror.style.lineHeight = style.lineHeight;
+      mirror.style.letterSpacing = style.letterSpacing;
+      mirror.style.textTransform = style.textTransform;
+      mirror.style.textIndent = style.textIndent;
+      mirror.style.tabSize = style.tabSize;
 
-      const pos = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : 0;
-      mirror.textContent = textarea.value.substring(0, pos);
+      mirror.textContent = '';
+      mirror.append(document.createTextNode(text.substring(0, anchor)));
 
-      const caretY = mirror.offsetHeight;
+      const marker = document.createElement('span');
+      marker.textContent = text[anchor] || '\u200b';
+      marker.style.display = 'inline-block';
+      marker.style.width = '1px';
+      marker.style.height = `${fallbackLineHeight}px`;
+      mirror.append(marker);
+
+      const caretY = marker.offsetTop;
       let target = caretY - textarea.clientHeight * QUICK_EDIT.EDITOR_SCROLL_ALIGNMENT_RATIO;
-      target = Math.max(0, target);
       const max = Math.max(0, textarea.scrollHeight - textarea.clientHeight);
-      target = Math.min(max, target);
+      target = clamp(target + fallbackLineHeight / 2, 0, max);
       textarea.scrollTop = target;
     } catch (e) {
       log('scrollTextareaToSelection failed', e);
@@ -1305,12 +1421,7 @@
         selectionCtx = textContainer ? getSelectionContextInElement(textContainer, { win: window, doc: document }) : null;
       }
 
-      // 4) 调整视口位置（避免编辑器跑到屏幕外）
-      scrollMessageInChat(mesEl, 'start', 'auto');
-      restoreWindowScrollStable(winPos);
-      scrollMessageToComfortPosition(mesEl);
-
-      // 5) 打开编辑器
+      // 4) 先点击编辑，让酒馆把 textarea 真正挂到当前楼层上
       if (!clickMessageEditButton(mesEl)) {
         toastWarn('未找到该楼层的编辑按钮（.mes_edit）。');
         return false;
@@ -1322,26 +1433,33 @@
         return false;
       }
 
-      // 6) 在编辑器中高亮定位（改进点：使用“前后上下文”+“模糊匹配”）
+      // 5) textarea 出现后，再把当前编辑楼层精确对齐到楼层头部
+      scrollMessageInChat(mesEl, 'start', 'auto');
+      restoreWindowScrollStable(winPos);
+      await sleep(32);
+      scrollMessageInChat(mesEl, 'start', 'auto');
+      restoreWindowScrollStable(winPos);
+
+      // 6) 在编辑器中高亮定位，并把光标附近内容滚到 textarea 可视区中间
       if (selectionCtx?.selectedText?.trim()) {
         const raw = textarea.value;
         const ctxRaw = getRawMessageTextFromContext(targetMesId);
 
         const match = computeBestMatchForTextarea(raw, ctxRaw, selectionCtx);
 
+        textarea.focus();
+
         if (match) {
-          textarea.focus();
           textarea.setSelectionRange(match.start, match.end);
-          scrollTextareaToSelection(textarea);
+          scrollTextareaToSelection(textarea, match.start, match.end);
         } else {
           // 找不到也没关系：至少打开编辑器并聚焦
-          textarea.focus();
-          textarea.scrollTop = 0;
+          scrollTextareaToSelection(textarea);
           toastInfo('已打开编辑器，但未能在原文中匹配到你选中的显示文本（可能被正则/HTML 渲染改写）。可尝试重新选择更长的片段/包含前后更多文字。');
         }
       } else {
         textarea.focus();
-        textarea.scrollTop = 0;
+        scrollTextareaToSelection(textarea);
       }
 
       quickEditState = {
@@ -1603,6 +1721,10 @@
         return jumpToMessage(lastId - 1, 'start');
       case 'recent1':
         return jumpToMessage(lastId, 'start');
+      case 'quickPage':
+        return quickFlipLatestMessagePage('right');
+      case 'quickPageLeft':
+        return quickFlipLatestMessagePage('left');
 
       // 收起/展开
       case 'toggleCollapse':
@@ -2206,6 +2328,53 @@
     }
   }
 
+  function syncScaleControls() {
+    const slider = document.getElementById('stcj-size-slider');
+    if (slider) {
+      slider.value = String(getRootScalePercent());
+      slider.style.setProperty('--stcj-slider-progress', `${getRootScaleSliderProgress()}%`);
+    }
+
+    const valueEl = document.getElementById('stcj-size-value');
+    if (valueEl) valueEl.textContent = formatRootScalePercent();
+  }
+
+  function applyRootScale(root) {
+    if (!root) return;
+
+    const scale = normalizeRootScale(settings.scale);
+    root.style.setProperty('--stcj-scale', String(scale));
+
+    if (root.classList.contains('stcj-global-hidden')) return;
+
+    if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
+      const { maxLeft, maxTop } = getRootMaxOffsets(root);
+      persistRootPosition(root, settings.rx * maxLeft, settings.ry * maxTop);
+      return;
+    }
+
+    const left = parseFloat(root.style.left || '0') || 0;
+    const top = parseFloat(root.style.top || '0') || 0;
+    persistRootPosition(root, left, top);
+  }
+
+  function setRootScale(scale) {
+    const nextScale = normalizeRootScale(scale);
+    if (settings.scale === nextScale) {
+      syncScaleControls();
+      return;
+    }
+
+    settings.scale = nextScale;
+    saveSettings();
+    syncScaleControls();
+
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+
+    applyRootScale(root);
+  }
+
   function setOrientation(orientation) {
     settings.orientation = orientation;
     saveSettings();
@@ -2295,6 +2464,7 @@
     const root = document.getElementById(ROOT_ID);
     if (root) {
       root.classList.toggle('stcj-global-hidden', globalHidden);
+      if (!globalHidden) applyRootScale(root);
     }
 
     // 更新设置面板中的按钮文本
@@ -2431,6 +2601,8 @@
     recent3:           '.stcj-btn[data-action="recent3"]',
     recent2:           '.stcj-btn[data-action="recent2"]',
     recent1:           '.stcj-btn[data-action="recent1"]',
+    quickPage:         '.stcj-btn[data-action="quickPage"]',
+    quickPageLeft:     '.stcj-btn[data-action="quickPageLeft"]',
     showRange:         '.stcj-btn[data-action="showRange"]',
     toggleOrientation: '.stcj-btn[data-action="toggleOrientation"]',
     prev:              '.stcj-btn[data-action="prev"]',
@@ -2550,6 +2722,18 @@
                 一键隐藏悬浮条
               </button>
             </div>
+            <div class="stcj-settings-size">
+              <div class="stcj-settings-size-header">
+                <div class="stcj-settings-size-copy">
+                  <span class="stcj-settings-size-title">悬浮条大小</span>
+                </div>
+                <span id="stcj-size-value">${formatRootScalePercent()}</span>
+              </div>
+              <input id="stcj-size-slider" class="text_pole" type="range" min="${MIN_SCALE * 100}" max="${MAX_SCALE * 100}" step="${SCALE_STEP * 100}" value="${getRootScalePercent()}" />
+              <div class="stcj-settings-size-scale" aria-hidden="true">
+                <span>50%</span><span>75%</span><span>100%</span><span>125%</span><span>150%</span>
+              </div>
+            </div>
             <div class="stcj-settings-hint">
               <small>勾选以显示/隐藏按钮，拖拽 <i class="fa-solid fa-grip-vertical"></i> 调整按钮顺序。</small>
             </div>
@@ -2573,6 +2757,18 @@
         globalHideBtn.title = '点击恢复 ST Chat Jumper 悬浮跳转条';
       }
     }
+
+    const sizeSlider = document.getElementById('stcj-size-slider');
+    if (sizeSlider) {
+      sizeSlider.addEventListener('input', (e) => {
+        setRootScale(Number(e.target.value) / 100);
+      });
+      sizeSlider.addEventListener('change', (e) => {
+        setRootScale(Number(e.target.value) / 100);
+      });
+    }
+
+    syncScaleControls();
 
     log('设置面板已挂载到 #extensions_settings2');
   }
@@ -2709,6 +2905,8 @@
       <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">${ICONS.num(3)}</div>
       <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">${ICONS.num(2)}</div>
       <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">${ICONS.num(1)}</div>
+      <div class="stcj-btn" data-action="quickPage" title="快速翻页(右)：点击最新楼层的右翻页按钮">${ICONS.fastForward}</div>
+      <div class="stcj-btn" data-action="quickPageLeft" title="快速翻页(左)：点击最新楼层的左翻页按钮">${ICONS.fastBackward}</div>
       <div class="stcj-btn" data-action="showRange" title="显示楼层区间">${ICONS.range}</div>
       <div class="stcj-btn stcj-hidden" data-action="resetRange" title="恢复默认聊天视图">${ICONS.restore}</div>
       <div class="stcj-range-chip" aria-live="polite" aria-hidden="true">
@@ -2741,6 +2939,7 @@
     document.body.appendChild(root);
 
     // 初始布局
+    root.style.setProperty('--stcj-scale', String(normalizeRootScale(settings.scale)));
     root.classList.toggle('stcj-horizontal', settings.orientation === 'horizontal');
     root.classList.toggle('stcj-vertical', settings.orientation === 'vertical');
     root.classList.toggle('stcj-collapsed', !!settings.collapsed);
