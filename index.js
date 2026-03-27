@@ -1,6 +1,6 @@
 /*
  * ST Chat Jumper
- * - 悬浮可拖拽
+ * - 长按悬浮条可拖拽
  * - 横/竖布局（按钮切换）
  * - 快速跳转：最近3楼、快速翻页（左/右）、上一楼（头部）、下一楼（头部）
  * - H/L：对齐“当前楼层”的头部/尾部（用于精确定位）
@@ -28,7 +28,7 @@
   /**
    * x/y: 兼容旧版本的像素坐标（仍会写入，方便调试）
    * rx/ry: 相对位置（0~1），用于窗口尺寸变化时保持相对位置
-   * collapsed: 是否收起按钮栏（仅保留拖拽手柄+收起按钮）
+   * collapsed: 是否收起按钮栏（仅保留悬浮条主体+收起按钮）
    * scale: 悬浮条缩放倍数
    * @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number}}
    */
@@ -152,6 +152,7 @@
   let isDragging = false;
   let dragPointerId = null;
   let dragStart = { x: 0, y: 0, left: 0, top: 0 };
+  let suppressButtonActionUntil = 0;
   let resizeRaf = null;
 
   // ===== 收藏（仅当前页面，不持久化） =====
@@ -322,6 +323,31 @@
   function getRootScaleSliderProgress(value = settings.scale) {
     const percent = getRootScalePercent(value);
     return clamp(((percent - MIN_SCALE * 100) / ((MAX_SCALE - MIN_SCALE) * 100)) * 100, 0, 100);
+  }
+
+  function getNowMs() {
+    try {
+      return typeof performance?.now === 'function' ? performance.now() : Date.now();
+    } catch {
+      return Date.now();
+    }
+  }
+
+  function suppressButtonActions(duration = 150) {
+    suppressButtonActionUntil = getNowMs() + duration;
+  }
+
+  function shouldSuppressButtonAction() {
+    return getNowMs() < suppressButtonActionUntil;
+  }
+
+  function triggerHapticFeedback(duration = 12) {
+    try {
+      if (typeof navigator?.vibrate !== 'function') return;
+      navigator.vibrate(duration);
+    } catch {
+      /* ignore */
+    }
   }
 
   function sleep(ms) {
@@ -2482,42 +2508,72 @@
   }
 
   function attachDrag(root) {
-    const handle = root.querySelector('.stcj-handle');
-    if (!handle) return;
-
     const DRAG_THRESHOLD = 6;
+    const LONG_PRESS_MS = 320;
+    let longPressTimer = null;
+    let captureTarget = null;
 
     // 禁止长按/右键菜单
-    handle.addEventListener('contextmenu', (e) => e.preventDefault());
+    root.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    handle.addEventListener('pointerdown', (e) => {
+    const resetDragFeedbackState = () => {
+      root.classList.remove('stcj-drag-arming', 'stcj-dragging');
+    };
+
+    const clearLongPressTimer = () => {
+      if (longPressTimer === null) return;
+      window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+      root.classList.remove('stcj-drag-arming');
+    };
+
+    root.addEventListener('pointerdown', (e) => {
       // 仅允许主指针拖动
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (dragPointerId !== null) return;
+      if (e.target instanceof Element && e.target.closest('.stcj-fav-panel')) return;
 
       isDragging = false;
       dragPointerId = e.pointerId;
+      suppressButtonActionUntil = 0;
       dragStart.x = e.clientX;
       dragStart.y = e.clientY;
       dragStart.left = parseFloat(root.style.left || '0') || 0;
       dragStart.top = parseFloat(root.style.top || '0') || 0;
+      resetDragFeedbackState();
+      root.classList.add('stcj-drag-arming');
 
-      // 立刻捕获指针，避免手指滑出手柄后丢失事件
+      captureTarget = e.target instanceof Element ? e.target : root;
+
+      // 立刻捕获指针，避免长按后手指滑出悬浮条时丢失事件
       try {
-        handle.setPointerCapture?.(e.pointerId);
+        captureTarget.setPointerCapture?.(e.pointerId);
       } catch {
         /* ignore */
       }
+
+      clearLongPressTimer();
+      longPressTimer = window.setTimeout(() => {
+        if (dragPointerId !== e.pointerId) return;
+        isDragging = true;
+        suppressButtonActions();
+        triggerHapticFeedback();
+        root.classList.remove('stcj-drag-arming');
+        root.classList.add('stcj-dragging');
+      }, LONG_PRESS_MS);
     });
 
-    handle.addEventListener('pointermove', (e) => {
+    root.addEventListener('pointermove', (e) => {
       if (dragPointerId !== e.pointerId) return;
 
       const dx = e.clientX - dragStart.x;
       const dy = e.clientY - dragStart.y;
 
       if (!isDragging) {
-        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-        isDragging = true;
+        if (Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+          clearLongPressTimer();
+        }
+        return;
       }
 
       e.preventDefault();
@@ -2534,32 +2590,38 @@
     });
 
     const finish = () => {
+      const wasDragging = isDragging;
+      clearLongPressTimer();
+      resetDragFeedbackState();
+
       try {
-        if (isDragging) {
+        if (wasDragging) {
           const left = parseFloat(root.style.left || '0') || 0;
           const top = parseFloat(root.style.top || '0') || 0;
           persistRootPosition(root, left, top);
         }
       } finally {
+        if (wasDragging) suppressButtonActions();
         isDragging = false;
         dragPointerId = null;
+        captureTarget = null;
       }
     };
 
-    handle.addEventListener('pointerup', (e) => {
+    root.addEventListener('pointerup', (e) => {
       if (dragPointerId !== e.pointerId) return;
       try {
-        handle.releasePointerCapture?.(e.pointerId);
+        captureTarget?.releasePointerCapture?.(e.pointerId);
       } catch {
         /* ignore */
       }
       finish();
     });
 
-    handle.addEventListener('pointercancel', (e) => {
+    root.addEventListener('pointercancel', (e) => {
       if (dragPointerId !== e.pointerId) return;
       try {
-        handle.releasePointerCapture?.(e.pointerId);
+        captureTarget?.releasePointerCapture?.(e.pointerId);
       } catch {
         /* ignore */
       }
@@ -2575,10 +2637,18 @@
       // 禁止长按/右键菜单
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
 
-      btn.addEventListener('pointerup', async () => {
+      btn.addEventListener('pointerup', async (e) => {
         // 如果刚刚拖拽，则不触发按钮动作
-        if (isDragging) return;
+        if (isDragging || shouldSuppressButtonAction()) return;
         if (btn.classList.contains('stcj-disabled')) return;
+
+        const rect = btn.getBoundingClientRect();
+        const isPointerInside =
+          e.clientX >= rect.left &&
+          e.clientX <= rect.right &&
+          e.clientY >= rect.top &&
+          e.clientY <= rect.bottom;
+        if (!isPointerInside) return;
 
         const action = btn.getAttribute('data-action');
         if (!action) return;
@@ -2617,7 +2687,7 @@
    * 根据当前设置，调整 #stcj-root 内按钮的可见性和顺序。
    * - 不可见的按钮添加 stcj-settings-hidden class
    * - 按 order 重新排列 DOM 子元素
-   * - 拖拽手柄 (.stcj-handle) 和收藏面板 (.stcj-fav-panel) 始终保持固定位置
+   * - 收藏面板 (.stcj-fav-panel) 始终保持固定位置
    */
   function refreshButtonLayout() {
     const root = document.getElementById(ROOT_ID);
@@ -2650,7 +2720,6 @@
     }
 
     // 2) 按 order 排序：收集所有可排序的元素
-    const handle = root.querySelector('.stcj-handle');
     const favPanel = root.querySelector('.stcj-fav-panel');
 
     // 获取排序后的按钮 ID 列表
@@ -2673,8 +2742,8 @@
       }
     }
 
-    // 3) 重新插入：handle 始终在最前，然后是排序后的按钮，最后是 favPanel
-    // 先移除所有可排序元素（不移除 handle 和 favPanel）
+    // 3) 重新插入：排序后的按钮在前，收藏面板始终放在最后
+    // 先移除所有可排序元素（不移除 favPanel）
     for (const el of sortableElements) {
       if (el.parentNode === root) root.removeChild(el);
     }
@@ -2897,10 +2966,10 @@
 
     const root = document.createElement('div');
     root.id = ROOT_ID;
+    root.title = '长按悬浮条即可拖动位置';
     root.className = `stcj-root stcj-${settings.orientation}`;
 
     root.innerHTML = `
-      <div class="stcj-handle" title="拖拽移动"></div>
       <div class="stcj-btn stcj-mini stcj-collapse" data-action="toggleCollapse"></div>
       <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">${ICONS.num(3)}</div>
       <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">${ICONS.num(2)}</div>

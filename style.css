@@ -24,31 +24,43 @@
   transition: opacity 0.2s, transform 0.15s ease;
 }
 
-#stcj-root .stcj-handle {
-  width: 8px;
-  height: 24px;
-  align-self: center;
-  margin: 0 2px;
-
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.2);
-  cursor: grab;
-  transition: background 0.2s;
+#stcj-root.stcj-drag-arming {
+  background: rgba(42, 42, 42, 0.8);
+  border-color: rgba(165, 216, 255, 0.28);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(165, 216, 255, 0.12),
+    0 0 18px rgba(165, 216, 255, 0.12);
+  animation: stcjDragArmingPulse 0.9s ease-in-out infinite;
 }
 
-#stcj-root.stcj-vertical .stcj-handle {
-  width: 24px;
-  height: 8px;
-  margin: 2px 0;
+#stcj-root.stcj-drag-arming .stcj-btn {
+  background: rgba(255, 255, 255, 0.08);
 }
 
-#stcj-root .stcj-handle:active {
-  cursor: grabbing;
-  background: rgba(255, 255, 255, 0.4);
+#stcj-root.stcj-dragging {
+  opacity: 0.92;
+  background: rgba(42, 42, 42, 0.82);
+  border-color: rgba(165, 216, 255, 0.34);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(165, 216, 255, 0.18),
+    0 0 22px rgba(165, 216, 255, 0.16);
 }
 
-#stcj-root .stcj-handle:hover {
-  background: rgba(255, 255, 255, 0.35);
+#stcj-root.stcj-dragging,
+#stcj-root.stcj-dragging * {
+  cursor: grabbing !important;
+}
+
+@keyframes stcjDragArmingPulse {
+  0%, 100% {
+    transform: scale(var(--stcj-scale));
+  }
+
+  50% {
+    transform: scale(calc(var(--stcj-scale) * 1.02));
+  }
 }
 
 #stcj-root.stcj-horizontal {
@@ -505,10 +517,6 @@
   #stcj-root .stcj-btn.stcj-mini {
     width: 28px;
     height: 28px;
-  }
-
-  #stcj-root .stcj-handle {
-    opacity: 0.6;
   }
 }
 
