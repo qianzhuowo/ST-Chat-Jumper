@@ -4,11 +4,14 @@
  * - 横/竖布局（按钮切换）
  * - 快速跳转：最近3楼、快速翻页（左/右）、上一楼（头部）、下一楼（头部）
  * - H/L：对齐“当前楼层”的头部/尾部（用于精确定位）
- * - 显示楼层区间 / 恢复默认视图
- * - 临时收藏列表
+ * - 跳转/区间显示：输入单数字跳转到该楼层（展示前后20层），输入区间显示指定范围
+ * - 区间翻页：激活区间后可上一段/下一段快速翻页，无需重新输入
+ * - 楼层收藏列表
  * - 定位编辑楼层内容
  * - 快速左/右翻页
  */
+
+import { messageFormatting as coreMessageFormatting } from '../../../../script.js';
 
 (function () {
   'use strict';
@@ -25,12 +28,17 @@
   const MAX_SCALE = 1.5;
   const SCALE_STEP = 0.01;
 
+  const DEFAULT_RANGE_STEP = 10;
+  const DEFAULT_RANGE_CONTEXT = 20;
+  const DEFAULT_RANGE_PAGING_MODE = 'expand';
+
   /**
    * x/y: 兼容旧版本的像素坐标（仍会写入，方便调试）
    * rx/ry: 相对位置（0~1），用于窗口尺寸变化时保持相对位置
    * collapsed: 是否收起按钮栏（仅保留悬浮条主体+收起按钮）
    * scale: 悬浮条缩放倍数
-   * @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number}}
+   * favPanel*: 最近收藏面板的自定义位置（基于视口保存，相对 root 重算）
+   * @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number, favPanelX: number|null, favPanelY: number|null, favPanelRx: number|null, favPanelRy: number|null, favPanelCustom: boolean}}
    */
   const DEFAULT_SETTINGS = {
     x: null,
@@ -40,6 +48,11 @@
     orientation: DEFAULT_ORIENTATION,
     collapsed: false,
     scale: DEFAULT_SCALE,
+    favPanelX: null,
+    favPanelY: null,
+    favPanelRx: null,
+    favPanelRy: null,
+    favPanelCustom: false,
   };
 
   // ===== 按钮可见性与排序设置（持久化到 extensionSettings） =====
@@ -58,7 +71,7 @@
     { id: 'recent1',           label: '最近第1楼',          defaultEnabled: true, order: 3 },
     { id: 'quickPage',         label: '快速翻页(右)',       defaultEnabled: true, order: 4 },
     { id: 'quickPageLeft',     label: '快速翻页(左)',       defaultEnabled: true, order: 5 },
-    { id: 'showRange',         label: '显示楼层区间',       defaultEnabled: true, order: 6 },
+    { id: 'showRange',         label: '跳转/区间显示',      defaultEnabled: true, order: 6 },
     { id: 'toggleOrientation', label: '横/竖布局切换',      defaultEnabled: true, order: 7 },
     { id: 'prev',              label: '上一楼',             defaultEnabled: true, order: 8 },
     { id: 'next',              label: '下一楼',             defaultEnabled: true, order: 9 },
@@ -139,6 +152,137 @@
     }
   }
 
+  /**
+   * 获取区间翻页步长（从 extensionSettings 读取，默认 10）
+   */
+  function getRangeStep() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return DEFAULT_RANGE_STEP;
+      const ext = ctx.extensionSettings[EXT_SETTINGS_KEY];
+      if (ext && typeof ext.rangeStep === 'number' && Number.isFinite(ext.rangeStep) && ext.rangeStep >= 1) {
+        return Math.round(ext.rangeStep);
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_RANGE_STEP;
+  }
+
+  /**
+   * 保存区间翻页步长到 extensionSettings
+   */
+  function saveRangeStep(step) {
+    try {
+      const val = Math.max(1, Math.round(Number(step)));
+      if (!Number.isFinite(val)) return;
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return;
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = {};
+      }
+      ctx.extensionSettings[EXT_SETTINGS_KEY].rangeStep = val;
+      ctx.saveSettingsDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * 获取跳转加载上下文层数（从 extensionSettings 读取，默认 20）
+   */
+  function getRangeContext() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return DEFAULT_RANGE_CONTEXT;
+      const ext = ctx.extensionSettings[EXT_SETTINGS_KEY];
+      if (ext && typeof ext.rangeContext === 'number' && Number.isFinite(ext.rangeContext) && ext.rangeContext >= 1) {
+        return Math.round(ext.rangeContext);
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_RANGE_CONTEXT;
+  }
+
+  function saveRangeContext(val) {
+    try {
+      const v = Math.max(1, Math.round(Number(val)));
+      if (!Number.isFinite(v)) return;
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return;
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = {};
+      }
+      ctx.extensionSettings[EXT_SETTINGS_KEY].rangeContext = v;
+      ctx.saveSettingsDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * 获取区间翻页模式：
+   * - expand: 扩展模式（默认）
+   * - shift: 平移模式
+   */
+  function getRangePagingMode() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return DEFAULT_RANGE_PAGING_MODE;
+      const ext = ctx.extensionSettings[EXT_SETTINGS_KEY];
+      return ext?.rangePagingMode === 'shift' ? 'shift' : DEFAULT_RANGE_PAGING_MODE;
+    } catch {
+      return DEFAULT_RANGE_PAGING_MODE;
+    }
+  }
+
+  function saveRangePagingMode(mode) {
+    try {
+      const nextMode = mode === 'shift' ? 'shift' : 'expand';
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return;
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = {};
+      }
+      ctx.extensionSettings[EXT_SETTINGS_KEY].rangePagingMode = nextMode;
+      ctx.saveSettingsDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function loadFavoritesPreviewMode() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return FAVORITES_PREVIEW_MODES.SWIPE_DEFAULT;
+      const ext = ctx.extensionSettings[EXT_SETTINGS_KEY];
+      return normalizeFavoritePreviewMode(ext?.favoritesPreviewMode);
+    } catch {
+      return FAVORITES_PREVIEW_MODES.SWIPE_DEFAULT;
+    }
+  }
+
+  function saveFavoritesPreviewMode(mode) {
+    try {
+      const nextMode = normalizeFavoritePreviewMode(mode);
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.extensionSettings) return;
+      if (!ctx.extensionSettings[EXT_SETTINGS_KEY]) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] = {};
+      }
+      ctx.extensionSettings[EXT_SETTINGS_KEY].favoritesPreviewMode = nextMode;
+      ctx.saveSettingsDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+
+  function formatRangePagingModeLabel(mode = getRangePagingMode()) {
+    return mode === 'shift' ? '平移' : '扩展';
+  }
+
   function isButtonEnabled(buttonId) {
     const buttons = getButtonSettings();
     const cfg = buttons.find(b => b.id === buttonId);
@@ -146,7 +290,7 @@
   }
 
 
-  /** @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number}} */
+  /** @type {{x: number|null, y: number|null, rx: number|null, ry: number|null, orientation: 'horizontal'|'vertical', collapsed: boolean, scale: number, favPanelX: number|null, favPanelY: number|null, favPanelRx: number|null, favPanelRy: number|null, favPanelCustom: boolean}} */
   let settings = loadSettings();
 
   let isDragging = false;
@@ -155,12 +299,42 @@
   let suppressButtonActionUntil = 0;
   let resizeRaf = null;
 
-  // ===== 收藏（仅当前页面，不持久化） =====
-  /** @type {number[]} */
-  let favoriteMesIds = [];
+  // ===== 收藏（持久化到当前聊天的 chatMetadata.stcjFavorites） =====
+  const FAVORITES_METADATA_KEY = 'stcjFavorites';
+  const FAVORITES_SAVE_DEBOUNCE = 120;
+  const FAVORITES_RECENT_LIMIT = 5;
+  const FAVORITES_MODAL_ID = 'stcj-favorites-modal';
+  const FAVORITES_MODAL_DRAWER_BREAKPOINT = 900;
+  const FAVORITES_MODAL_CARD_PREFIX = 'stcj-fav-card';
+  const FAVORITE_QUICK_MENU_OVERLAY_ID = 'stcj-fav-quick-menu-overlay';
+  const FAVORITES_PREVIEW_MODES = {
+    SWIPE_DEFAULT: 'swipe_default',
+    SWIPE_HTML: 'swipe_html',
+    STAR_MAIN: 'star_main',
+  };
+  const FAVORITES_PREVIEW_MODE_ORDER = [
+    FAVORITES_PREVIEW_MODES.SWIPE_DEFAULT,
+    FAVORITES_PREVIEW_MODES.SWIPE_HTML,
+    FAVORITES_PREVIEW_MODES.STAR_MAIN,
+  ];
+
+  /** @type {Array<{id:string,messageId:number,note:string,textHash:string,previewText:string,sender:string,sendDate:string,createdAt:number,updatedAt:number}>} */
+  let favoriteItems = [];
   let favPanelOpen = false;
   let pinMode = false;
   let globalHidden = false;
+  let favoriteQuickMenuId = null;
+  let favoritesSaveTimer = null;
+  let favoritesModalOpen = false;
+  let favoritesModalSort = 'floor_asc';
+  let favoritesModalActiveId = null;
+  let favoritesPreviewMode = FAVORITES_PREVIEW_MODES.SWIPE_DEFAULT;
+  let favoritesSidebarCollapsed = false;
+  let favoritesSidebarDrawerOpen = false;
+  const favoritesPreviewIframeToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let favoritesPreviewMessageListenerAttached = false;
+  let favoritesRenderSeq = 0;
+  let favoriteSyncSeq = 0;
 
   // ===== 快速编辑（铅笔） =====
   /** @type {null|{mesId:number, scrollTop:number|null, scrollEl:HTMLElement|null, selectionCtx:null|{selectedText:string,before:string,after:string,displayText:string,start:number,end:number}, detachOutside: null|(() => void), monitorTimer:number|null}} */
@@ -199,12 +373,20 @@
     head: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7M5 5h14"/></svg>',
     tail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7M5 19h14"/></svg>',
     pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>',
+    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>',
+    sidebarExpand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="9" y1="4" x2="9" y2="20"></line><polyline points="13 9 16 12 13 15"></polyline></svg>',
+    sidebarCollapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="9" y1="4" x2="9" y2="20"></line><polyline points="15 9 12 12 15 15"></polyline></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+    more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"></circle><circle cx="12" cy="12" r="2"></circle><circle cx="19" cy="12" r="2"></circle></svg>',
     num: (n) => `<svg viewBox="0 0 24 24" fill="none"><text x="50%" y="55%" dominant-baseline="central" text-anchor="middle" font-weight="500" font-size="16" fill="currentColor" font-family="var(--sans-font, sans-serif)">${n}</text></svg>`,
     range: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"></path></svg>',
     restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15A9 9 0 1 1 23 10"></path></svg>',
     pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>',
+    arrowUpRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"></path><path d="M8 7h9v9"></path></svg>',
+    warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"></path><path d="M12 17h.01"></path><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.72 3h16.92a2 2 0 0 0 1.72-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path></svg>',
+    note: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16l4-3h10a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>',
   };
 
   /**
@@ -277,6 +459,11 @@
       const ry = typeof parsed.ry === 'number' && Number.isFinite(parsed.ry) ? clamp(parsed.ry, 0, 1) : null;
       const collapsed = typeof parsed.collapsed === 'boolean' ? parsed.collapsed : DEFAULT_SETTINGS.collapsed;
       const scale = normalizeRootScale(parsed.scale);
+      const favPanelX = typeof parsed.favPanelX === 'number' && Number.isFinite(parsed.favPanelX) ? parsed.favPanelX : null;
+      const favPanelY = typeof parsed.favPanelY === 'number' && Number.isFinite(parsed.favPanelY) ? parsed.favPanelY : null;
+      const favPanelRx = typeof parsed.favPanelRx === 'number' && Number.isFinite(parsed.favPanelRx) ? clamp(parsed.favPanelRx, 0, 1) : null;
+      const favPanelRy = typeof parsed.favPanelRy === 'number' && Number.isFinite(parsed.favPanelRy) ? clamp(parsed.favPanelRy, 0, 1) : null;
+      const favPanelCustom = typeof parsed.favPanelCustom === 'boolean' ? parsed.favPanelCustom : DEFAULT_SETTINGS.favPanelCustom;
 
       return {
         ...DEFAULT_SETTINGS,
@@ -288,6 +475,11 @@
         orientation,
         collapsed,
         scale,
+        favPanelX,
+        favPanelY,
+        favPanelRx,
+        favPanelRy,
+        favPanelCustom,
       };
     } catch {
       return { ...DEFAULT_SETTINGS };
@@ -629,6 +821,60 @@
     return Number.isNaN(id) ? 0 : id;
   }
 
+  /**
+   * 记录当前视口锚点楼层，以及它相对聊天视口顶部的像素偏移。
+   * 用于在重建区间 DOM 后，尽量恢复到完全相同的阅读位置（而不只是回到楼层头部）。
+   *
+   * @returns {null|{mesId:number, offsetTop:number}}
+   */
+  function captureViewportAnchor() {
+    const scrollEl = getChatScrollElement();
+    const anchorEl = getAnchorMessageElement();
+    if (!scrollEl || !anchorEl) return null;
+
+    try {
+      const mesId = parseInt(anchorEl.getAttribute('mesid') || '', 10);
+      if (Number.isNaN(mesId)) return null;
+
+      const vp = scrollEl.getBoundingClientRect();
+      const rect = anchorEl.getBoundingClientRect();
+      return {
+        mesId,
+        offsetTop: rect.top - vp.top,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 按“原像素偏移”恢复锚点楼层在视口中的位置。
+   * 这比 scrollMessageInChat(..., 'start') 更适合连续阅读场景。
+   *
+   * @param {{mesId:number, offsetTop:number}|null} state
+   */
+  function restoreViewportAnchor(state) {
+    const scrollEl = getChatScrollElement();
+    if (!state || !scrollEl) return false;
+
+    const el = document.querySelector(`#chat .mes[mesid="${state.mesId}"]`);
+    if (!el) return false;
+
+    try {
+      const vp = scrollEl.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      const currentOffset = rect.top - vp.top;
+      const delta = currentOffset - state.offsetTop;
+      const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      const targetTop = clamp(scrollEl.scrollTop + delta, 0, max);
+      scrollEl.scrollTo?.({ top: targetTop, behavior: 'auto' });
+      if (typeof scrollEl.scrollTo !== 'function') scrollEl.scrollTop = targetTop;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function trySlashChatJump(mesId) {
     try {
       const cmd = window.SillyTavern?.SlashCommandParser?.commands?.['chat-jump'];
@@ -866,37 +1112,74 @@
       const msg = chat?.[mesId];
       if (!msg) return null;
 
-      const getPartText = (p) => {
-        if (p == null) return '';
-        if (typeof p === 'string') return p;
-        if (typeof p === 'object' && 'text' in p) return String(p.text ?? '');
-        return String(p);
-      };
-
-      const joinMaybeParts = (val) => {
-        if (val == null) return '';
-        if (Array.isArray(val)) return val.map(getPartText).join('');
-        return String(val);
-      };
-
-      // swipes 优先
-      if (Array.isArray(msg.swipes) && msg.swipes.length > 0) {
-        const rawSwipeId =
-          Number.isInteger(msg.swipe_id) ? msg.swipe_id :
-            (Number.isInteger(msg.swipeId) ? msg.swipeId :
-              (Number.isInteger(msg.swipeID) ? msg.swipeID : 0));
-        const idx = Math.trunc(clamp(rawSwipeId, 0, Math.max(0, msg.swipes.length - 1)));
-        const swipe = msg.swipes[idx];
-        const text = joinMaybeParts(swipe);
-        if (text) return text;
-      }
-
-      const base = msg.mes ?? msg.message ?? msg.text;
-      const out = joinMaybeParts(base);
-      return out || null;
+      const snapshot = getCurrentMessageSnapshot(msg);
+      return snapshot.text || null;
     } catch {
       return null;
     }
+  }
+
+  function getMessagePartText(part) {
+    if (part == null) return '';
+    if (typeof part === 'string') return part;
+    if (typeof part === 'object' && 'text' in part) return String(part.text ?? '');
+    return String(part);
+  }
+
+  function joinMaybeMessageParts(value) {
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.map(getMessagePartText).join('');
+    return String(value);
+  }
+
+  function getMessageContentText(message) {
+    const base = message?.mes ?? message?.message ?? message?.text ?? message?.content;
+    return joinMaybeMessageParts(base);
+  }
+
+  function getMessageCurrentSwipeIndex(message) {
+    if (!Array.isArray(message?.swipes) || !message.swipes.length) return -1;
+    const rawSwipeId =
+      Number.isInteger(message?.swipe_id) ? message.swipe_id :
+        (Number.isInteger(message?.swipeId) ? message.swipeId :
+          (Number.isInteger(message?.swipeID) ? message.swipeID : 0));
+    return Math.trunc(clamp(rawSwipeId, 0, Math.max(0, message.swipes.length - 1)));
+  }
+
+  function getMessageSwipeEntries(message) {
+    if (!Array.isArray(message?.swipes) || !message.swipes.length) return [];
+    return message.swipes.map((swipe, index) => ({
+      index,
+      text: joinMaybeMessageParts(swipe),
+      media: message?.swipe_info?.[index]?.extra?.media ?? null,
+      reasoning: message?.swipe_info?.[index]?.extra?.reasoning
+        ? String(message.swipe_info[index].extra.reasoning)
+        : '',
+    }));
+  }
+
+  function getMessageSwipeEntry(message, swipeIndex = getMessageCurrentSwipeIndex(message)) {
+    if (!Number.isInteger(swipeIndex) || swipeIndex < 0) return null;
+    return getMessageSwipeEntries(message).find((entry) => entry.index === swipeIndex) || null;
+  }
+
+  function getCurrentMessageSnapshot(message) {
+    const swipeEntry = getMessageSwipeEntry(message);
+    if (swipeEntry && swipeEntry.text) {
+      return {
+        text: swipeEntry.text,
+        swipeIndex: swipeEntry.index,
+        media: swipeEntry.media,
+        reasoning: swipeEntry.reasoning,
+      };
+    }
+
+    return {
+      text: getMessageContentText(message),
+      swipeIndex: -1,
+      media: message?.extra?.media ?? null,
+      reasoning: message?.extra?.reasoning ? String(message.extra.reasoning) : '',
+    };
   }
 
   function normalizeAndMap(text, options) {
@@ -1585,8 +1868,12 @@
   function updateRangeButtons(root) {
     const rangeBtn = root.querySelector('.stcj-btn[data-action="showRange"]');
     const resetBtn = root.querySelector('.stcj-btn[data-action="resetRange"]');
-    const editBtn = root.querySelector('.stcj-btn[data-action="editRange"]');
+    const editBtn = root.querySelector('.stcj-range-chip-main[data-action="editRange"]');
+    const rangePrevBtn = root.querySelector('.stcj-btn[data-action="rangePrev"]');
+    const rangeNextBtn = root.querySelector('.stcj-btn[data-action="rangeNext"]');
+    const rangeStack = root.querySelector('.stcj-range-stack');
     const rangeChip = root.querySelector('.stcj-range-chip');
+    const rangeLabel = root.querySelector('.stcj-range-chip-label');
     const rangeValue = root.querySelector('.stcj-range-chip-value');
     const isActive = !!activeRange;
     const currentText = formatRangeText(activeRange);
@@ -1596,14 +1883,22 @@
     if (rangeChip) {
       rangeChip.classList.toggle('stcj-show', isActive);
       rangeChip.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+      rangeChip.classList.toggle('stcj-disabled', !isActive);
+    }
+
+    if (rangeStack) {
+      rangeStack.classList.toggle('stcj-show', isActive);
+      rangeStack.classList.toggle('stcj-hidden', !isActive);
+      rangeStack.setAttribute('aria-hidden', isActive ? 'false' : 'true');
     }
 
     if (rangeValue) rangeValue.textContent = currentText;
 
     if (rangeBtn) {
       rangeBtn.title = isActive
-        ? `显示楼层区间（当前：${currentText}）`
-        : '显示楼层区间';
+        ? `跳转/区间显示（当前：${currentText}）`
+        : '跳转/区间显示（输入楼层号或区间）';
+      rangeBtn.classList.toggle('stcj-hidden', isActive);
     }
 
     if (resetBtn) {
@@ -1618,6 +1913,36 @@
       editBtn.classList.toggle('stcj-disabled', !isActive);
       editBtn.title = isActive ? `修改当前区间（${currentText}）` : '需先显示区间后才能修改';
     }
+
+    if (rangeLabel) {
+      rangeLabel.title = isActive ? `修改当前区间（${currentText}）` : '需先显示区间后才能修改';
+    }
+
+    // 区间导航按钮：根据是否到达边界来设置禁用状态
+    if (rangePrevBtn) {
+      const atStart = !isActive || (activeRange && activeRange.start <= 0);
+      rangePrevBtn.classList.toggle('stcj-disabled', !!atStart);
+      rangePrevBtn.title = isActive
+        ? (atStart ? '已经是最早的楼层了' : '向前扩展区间')
+        : '需先显示区间';
+    }
+
+    if (rangeNextBtn) {
+      let atEnd = !isActive;
+      if (isActive) {
+        try {
+          const ctx = window.SillyTavern?.getContext?.();
+          const maxId = Array.isArray(ctx?.chat) ? ctx.chat.length - 1 : activeRange.end;
+          atEnd = activeRange.end >= maxId;
+        } catch {
+          atEnd = false;
+        }
+      }
+      rangeNextBtn.classList.toggle('stcj-disabled', !!atEnd);
+      rangeNextBtn.title = isActive
+        ? (atEnd ? '已经是最新的楼层了' : '向后扩展区间')
+        : '需先显示区间';
+    }
   }
 
   function setActiveRange(range) {
@@ -1629,23 +1954,40 @@
 
   function parseRangeInput(raw, maxId) {
     if (typeof raw !== 'string') return null;
-    const match = raw.trim().replace(/\s+/g, '').match(/^(\d+)-(\d+)$/);
-    if (!match) return null;
+    const trimmed = raw.trim().replace(/\s+/g, '');
 
-    const start = Number(match[1]);
-    const end = Number(match[2]);
+    // 支持单数字输入：跳转到该楼层，展示前后 N 层（N = rangeContext 设置值）
+    const singleMatch = trimmed.match(/^(\d+)$/);
+    if (singleMatch) {
+      const target = Number(singleMatch[1]);
+      if (!Number.isInteger(target) || target < 0 || target > maxId) return null;
+      const ctx = getRangeContext();
+      const start = Math.max(0, target - ctx);
+      const end = Math.min(maxId, target + ctx);
+      return { start, end, jumpTo: target };
+    }
 
+    // 区间格式：a-b
+    const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
+    if (!rangeMatch) return null;
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
     if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
     if (start < 0 || start > end || end > maxId) return null;
-
     return { start, end };
   }
 
   async function showRangePrompt(maxId) {
-    const tip = `请输入显示区间（格式: 0-10，范围: 0-${maxId}）`;
+    const ctxN = getRangeContext();
+    const totalFloors = maxId + 1;
+    let tip = `共 ${totalFloors} 楼（0-${maxId}）`;
+    if (activeRange) {
+      tip += `，当前显示：${activeRange.start}-${activeRange.end}`;
+    }
+    tip += `\n输入楼层号跳转（前后各${ctxN}层）或区间如 0-10`;
     const defaultValue = activeRange
       ? `${activeRange.start}-${activeRange.end}`
-      : `0-${Math.min(10, maxId)}`;
+      : `${Math.max(0, maxId)}`;
 
     let value = null;
 
@@ -1665,7 +2007,7 @@
     return value.trim();
   }
 
-  async function showFloorRange() {
+  async function showFloorRange(rawInput = null) {
     const ctx = window.SillyTavern?.getContext?.();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : null;
     const chatEl = getChatContainer();
@@ -1676,15 +2018,17 @@
     }
 
     const maxId = chat.length - 1;
-    const input = await showRangePrompt(maxId);
+    const input = typeof rawInput === 'string' ? rawInput.trim() : await showRangePrompt(maxId);
     if (!input) {
-      toastError('未填入有效区间。');
+      if (typeof rawInput !== 'string') {
+        toastInfo('已取消。');
+      }
       return false;
     }
 
     const range = parseRangeInput(input, maxId);
     if (!range) {
-      toastError(`未填入有效区间（应为 0-${maxId} 内的 a-b）。`);
+      toastError(`输入无效（请输入 0-${maxId} 范围内的楼层号或区间如 a-b）。`);
       return false;
     }
 
@@ -1698,9 +2042,31 @@
       ctx.addOneMessage(chat[i], { forceId: i });
     }
 
-    getChatScrollElement()?.scrollTo?.({ top: 0, behavior: 'auto' });
     setActiveRange(range);
-    toastSuccess(`已显示楼层区间：${range.start}-${range.end}`);
+
+    // 如果是单数字跳转模式，滚动到目标楼层
+    if (typeof range.jumpTo === 'number') {
+      // 等待 DOM 渲染完成
+      await sleep(50);
+      const targetEl = await waitForMessageElement(range.jumpTo, 2000);
+      if (targetEl) {
+        const winPos = captureWindowScroll();
+        scrollMessageInChat(targetEl, 'start', 'auto');
+        restoreWindowScrollStable(winPos);
+        // 二次对齐：确保渲染稳定后精确到顶部
+        await sleep(50);
+        scrollMessageInChat(targetEl, 'start', 'auto');
+        restoreWindowScrollStable(winPos);
+        flashMessage(targetEl);
+      } else {
+        getChatScrollElement()?.scrollTo?.({ top: 0, behavior: 'auto' });
+      }
+      toastSuccess(`已跳转到第 ${range.jumpTo} 楼（显示区间：${range.start}-${range.end}）`);
+    } else {
+      getChatScrollElement()?.scrollTo?.({ top: 0, behavior: 'auto' });
+      toastSuccess(`已显示楼层区间：${range.start}-${range.end}`);
+    }
+
     return true;
   }
 
@@ -1709,8 +2075,26 @@
       toastInfo('当前已是默认聊天视图。');
       return true;
     }
+    const previousRange = activeRange ? { ...activeRange } : null;
+
+    // 若当前区间本身已经覆盖整段聊天，则无需 reload，直接退出“区间模式”即可。
+    // 这能解决小聊天里（如总共 0-5 楼，跳转 5 仍显示 0-5）点击“恢复”看起来没反应的问题。
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      const maxId = Array.isArray(ctx?.chat) && ctx.chat.length > 0 ? ctx.chat.length - 1 : null;
+      if (typeof maxId === 'number' && activeRange.start <= 0 && activeRange.end >= maxId) {
+        setActiveRange(null);
+        toastSuccess('已恢复默认视图');
+        return true;
+      }
+    } catch {
+      /* ignore */
+    }
 
     try {
+      // 先同步悬浮条 UI，避免聊天内容已恢复但按钮状态还滞后一段时间。
+      setActiveRange(null);
+
       if (typeof window.SillyTavern?.reloadCurrentChat === 'function') {
         await window.SillyTavern.reloadCurrentChat();
       } else if (typeof window.SillyTavern?.getContext === 'function') {
@@ -1723,17 +2107,128 @@
         }
       } else {
         toastError('当前环境不支持恢复默认聊天视图。');
+        if (previousRange) setActiveRange(previousRange);
         return false;
       }
-
-      setActiveRange(null);
       toastSuccess('已恢复默认聊天视图。');
       return true;
     } catch (e) {
+      if (previousRange) setActiveRange(previousRange);
       log('恢复默认聊天视图失败', e);
       toastError('恢复默认聊天视图失败，请稍后重试。');
       return false;
     }
+  }
+
+  /**
+   * 区间翻页：
+   * - expand: 增量扩展（next 扩 end，prev 扩 start）
+   * - shift: 平移窗口（保持区间长度不变）
+   * 步长 = 用户自定义的 rangeStep（默认 10），模式 = 用户设置。
+   */
+  async function shiftFloorRange(direction) {
+    if (!activeRange) {
+      toastWarn('当前没有激活的楼层区间。');
+      return false;
+    }
+
+    const ctx = window.SillyTavern?.getContext?.();
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat : null;
+    const chatEl = getChatContainer();
+    if (!chat || !chatEl || chat.length === 0) {
+      toastWarn('当前聊天为空。');
+      return false;
+    }
+
+    const maxId = chat.length - 1;
+    const step = Math.max(1, getRangeStep());
+    const rangeSize = activeRange.end - activeRange.start + 1;
+    const pagingMode = getRangePagingMode();
+
+    let newStart, newEnd;
+
+    if (direction === 'next') {
+      if (activeRange.end >= maxId) {
+        toastInfo('已经是最新的楼层了。');
+        return false;
+      }
+
+      if (pagingMode === 'shift') {
+        newStart = Math.min(activeRange.start + step, maxId);
+        newEnd = Math.min(newStart + rangeSize - 1, maxId);
+        newStart = Math.max(0, newEnd - rangeSize + 1);
+      } else {
+        newStart = activeRange.start;
+        newEnd = Math.min(activeRange.end + step, maxId);
+      }
+    } else {
+      if (activeRange.start <= 0) {
+        toastInfo('已经是最早的楼层了。');
+        return false;
+      }
+
+      if (pagingMode === 'shift') {
+        newEnd = Math.max(activeRange.end - step, 0);
+        newStart = Math.max(newEnd - rangeSize + 1, 0);
+        newEnd = Math.min(maxId, newStart + rangeSize - 1);
+      } else {
+        newStart = Math.max(activeRange.start - step, 0);
+        newEnd = activeRange.end;
+      }
+    }
+
+    if (newStart === activeRange.start && newEnd === activeRange.end) {
+      toastInfo('当前区间无需变化。');
+      return false;
+    }
+
+    if (typeof ctx.addOneMessage !== 'function') {
+      toastError('当前环境不支持 addOneMessage，无法切换区间。');
+      return false;
+    }
+
+    // 记住当前阅读位置：锚点楼层 + 它相对视口顶部的像素偏移
+    const anchorState = captureViewportAnchor();
+    const winPos = captureWindowScroll();
+
+    chatEl.replaceChildren();
+    for (let i = newStart; i <= newEnd; i++) {
+      ctx.addOneMessage(chat[i], { forceId: i });
+    }
+
+    const range = { start: newStart, end: newEnd };
+    setActiveRange(range);
+
+    // 扩展模式下，原阅读位置必然还在新区间内；
+    // 平移模式下，如果锚点仍在新区间内，也尽量按像素保位恢复。
+    if (anchorState) {
+      const anchorStillVisible = anchorState.mesId >= newStart && anchorState.mesId <= newEnd;
+      if (anchorStillVisible) {
+        await waitForMessageElement(anchorState.mesId, 1000);
+        restoreViewportAnchor(anchorState);
+        restoreWindowScrollStable(winPos);
+        await sleep(32);
+        restoreViewportAnchor(anchorState);
+        restoreWindowScrollStable(winPos);
+      } else {
+        // 平移模式且锚点移出新区间：退化为把新区间边界对齐到头部，避免跳到奇怪的位置
+        const fallbackId = direction === 'next' ? newStart : newEnd;
+        const fallbackEl = await waitForMessageElement(fallbackId, 1000);
+        if (fallbackEl) {
+          scrollMessageInChat(fallbackEl, 'start', 'auto');
+          restoreWindowScrollStable(winPos);
+        } else {
+          const se = getChatScrollElement();
+          if (se) {
+            se.scrollTo?.({ top: direction === 'next' ? 0 : se.scrollHeight, behavior: 'auto' });
+            restoreWindowScrollStable(winPos);
+          }
+        }
+      }
+    }
+
+    toastSuccess(`已切换区间：${newStart}-${newEnd}（${formatRangePagingModeLabel(pagingMode)}模式）`);
+    return true;
   }
 
   async function handleAction(action) {
@@ -1760,6 +2255,10 @@
       // 楼层区间显示 / 恢复默认
       case 'showRange':
         return showFloorRange();
+      case 'rangePrev':
+        return shiftFloorRange('prev');
+      case 'rangeNext':
+        return shiftFloorRange('next');
       case 'resetRange':
         return restoreDefaultRangeView();
       case 'editRange':
@@ -1775,7 +2274,11 @@
         togglePinMode();
         return;
 
-      // 收藏列表：展开/收起
+      case 'openFavoritesManager':
+        openFavoritesManager();
+        return;
+
+      // 最近收藏：展开/收起
       case 'toggleFavPanel':
         setFavPanelOpen(!favPanelOpen);
         return;
@@ -1842,7 +2345,7 @@
     if (!btn) return;
 
     setIcon(btn, favPanelOpen ? 'chevronDown' : 'chevronRight');
-    btn.title = favPanelOpen ? '收起收藏列表' : '展开收藏列表';
+    btn.title = favPanelOpen ? '收起最近收藏' : '展开最近收藏';
   }
 
   function formatFloorLabel(mesId) {
@@ -1850,14 +2353,1883 @@
     return `第 ${mesId} 楼`;
   }
 
+  function normalizeFavoriteSwipeIndex(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? Math.max(-1, Math.trunc(num)) : -1;
+  }
+
+  function formatFavoriteSwipeLabel(swipeIndex) {
+    const idx = normalizeFavoriteSwipeIndex(swipeIndex);
+    return idx >= 0 ? `分支 ${idx + 1}` : '';
+  }
+
+  function formatFavoriteSwipeBadgeLabel(swipeIndex) {
+    const idx = normalizeFavoriteSwipeIndex(swipeIndex);
+    return idx >= 0 ? `S${idx + 1}` : '';
+  }
+
+  function buildFavoriteSwipeBadgeHtml(swipeIndex) {
+    const badge = formatFavoriteSwipeBadgeLabel(swipeIndex);
+    if (!badge) return '';
+    return `<span class="stcj-swipe-badge" title="${escapeHtml(formatFavoriteSwipeLabel(swipeIndex))}">${escapeHtml(badge)}</span>`;
+  }
+
+  function normalizeFavoriteText(value) {
+    return String(value ?? '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function computeTextHash(text) {
+    const source = String(text ?? '');
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `h${(hash >>> 0).toString(16)}`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatFavoriteTimestamp(value) {
+    if (value == null || value === '') return '时间未知';
+    try {
+      const num = Number(value);
+      const date = new Date(Number.isFinite(num) ? num : value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString();
+    } catch {
+      return String(value);
+    }
+  }
+
+  function renderFavoriteMarkdownFallback(text) {
+    const codeBlocks = [];
+    const source = String(text ?? '').replace(/\r\n?/g, '\n');
+    let html = escapeHtml(source);
+
+    html = html.replace(/```([\w-]+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+      const token = `@@STCJCODEBLOCK${codeBlocks.length}@@`;
+      const safeLang = lang ? `<div class="stcj-md-code-lang">${escapeHtml(lang)}</div>` : '';
+      codeBlocks.push(`<pre class="stcj-md-code-block">${safeLang}<code>${code}</code></pre>`);
+      return token;
+    });
+
+    html = html
+      .replace(/^>\s?(.*)$/gm, '<blockquote>$1</blockquote>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+      .replace(/_([^_\n]+)_/g, '<em>$1</em>')
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+    html = html
+      .split(/\n{2,}/)
+      .map((block) => {
+        const trimmed = block.trim();
+        if (!trimmed) return '';
+        if (/^@@STCJCODEBLOCK\d+@@$/.test(trimmed)) return trimmed;
+        if (trimmed.startsWith('<blockquote>')) return trimmed.replace(/\n/g, '<br>');
+        return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+      })
+      .join('');
+
+    codeBlocks.forEach((block, index) => {
+      html = html.replace(`@@STCJCODEBLOCK${index}@@`, block);
+    });
+
+    return html || '<p class="stcj-empty-copy">无内容</p>';
+  }
+
+  function renderFavoriteMarkdown(text) {
+    const raw = String(text ?? '');
+    try {
+      if (typeof window.marked?.parse === 'function') {
+        return window.marked.parse(raw, { breaks: true });
+      }
+    } catch {
+      /* ignore */
+    }
+    return renderFavoriteMarkdownFallback(raw);
+  }
+
+  function normalizeFavoritePreviewMode(mode) {
+    return FAVORITES_PREVIEW_MODE_ORDER.includes(mode) ? mode : FAVORITES_PREVIEW_MODES.SWIPE_DEFAULT;
+  }
+
+  function getFavoritePreviewModeLabel(mode) {
+    switch (normalizeFavoritePreviewMode(mode)) {
+      case FAVORITES_PREVIEW_MODES.SWIPE_HTML:
+        return '轻前端';
+      case FAVORITES_PREVIEW_MODES.STAR_MAIN:
+        return '全前端';
+      default:
+        return '文本';
+    }
+  }
+
+  function buildFavoritePreviewModeSwitchHtml() {
+    const mode = normalizeFavoritePreviewMode(favoritesPreviewMode);
+    return `
+      <div class="stcj-pill-switch stcj-preview-mode-switch is-${mode}">
+        <span class="stcj-pill-switch-thumb"></span>
+        <button type="button" class="stcj-pill-switch-option" data-action="setFavoritesPreviewMode" data-preview-mode="${FAVORITES_PREVIEW_MODES.SWIPE_DEFAULT}" title="纯文本预览，最快最稳">文本</button>
+        <button type="button" class="stcj-pill-switch-option" data-action="setFavoritesPreviewMode" data-preview-mode="${FAVORITES_PREVIEW_MODES.SWIPE_HTML}" title="轻量前端渲染，适合简单页面">轻前端</button>
+        <button type="button" class="stcj-pill-switch-option" data-action="setFavoritesPreviewMode" data-preview-mode="${FAVORITES_PREVIEW_MODES.STAR_MAIN}" title="完整前端渲染，效果最丰富">全前端</button>
+      </div>
+    `;
+  }
+
+  function normalizeFavoriteSortMode(mode) {
+    return ['floor_asc', 'floor_desc', 'created_desc'].includes(mode) ? mode : 'floor_asc';
+  }
+
+  function buildFavoriteSortModeSwitchHtml() {
+    const mode = normalizeFavoriteSortMode(favoritesModalSort);
+    return `
+      <div class="stcj-pill-switch stcj-sort-mode-switch is-${mode}">
+        <span class="stcj-pill-switch-thumb"></span>
+        <button type="button" class="stcj-pill-switch-option" data-action="setFavoritesSortMode" data-sort-mode="floor_asc">顺序</button>
+        <button type="button" class="stcj-pill-switch-option" data-action="setFavoritesSortMode" data-sort-mode="floor_desc">倒序</button>
+        <button type="button" class="stcj-pill-switch-option" data-action="setFavoritesSortMode" data-sort-mode="created_desc">收藏顺序</button>
+      </div>`;
+  }
+
+  function isFavoritesModalMobileLayout() {
+    try {
+      if (typeof window.matchMedia === 'function') {
+        return window.matchMedia(`(max-width: ${FAVORITES_MODAL_DRAWER_BREAKPOINT}px)`).matches;
+      }
+    } catch {
+      /* ignore */
+    }
+    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
+    return viewportWidth <= FAVORITES_MODAL_DRAWER_BREAKPOINT;
+  }
+
+  function updateFavoritesSidebarToggleButton(modal, isMobile = isFavoritesModalMobileLayout()) {
+    const button = modal?.querySelector('.stcj-modal-sidebar-toggle');
+    if (!button) return;
+    const isOpen = isMobile ? favoritesSidebarDrawerOpen : !favoritesSidebarCollapsed;
+    const label = isOpen ? '收起' : '展开';
+    button.setAttribute('title', isMobile ? `${label}抽屉` : label);
+    button.setAttribute('aria-label', isMobile ? `${label}抽屉` : label);
+    button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    button.innerHTML = `${getIcon(isOpen ? 'sidebarCollapse' : 'sidebarExpand')}<span class="stcj-modal-sidebar-toggle-label">${label}</span>`;
+  }
+
+  function formatFavoritesModalSubtitle(text, isMobile = isFavoritesModalMobileLayout()) {
+    const raw = String(text || '当前聊天');
+    if (!isMobile) return raw;
+    const chars = Array.from(raw);
+    if (chars.length <= 16) return raw;
+    return `…${chars.slice(-16).join('')}`;
+  }
+
+  function updateFavoritesModalSubtitle(modal, fullText) {
+    const subtitleEl = modal?.querySelector('.stcj-modal-subtitle');
+    const mobileSubtitleEl = modal?.querySelector('.stcj-modal-sidebar-mobile-subtitle');
+    const raw = String(fullText || subtitleEl?.dataset.fullTitle || mobileSubtitleEl?.dataset.fullTitle || '当前聊天');
+    if (!subtitleEl) return;
+    subtitleEl.dataset.fullTitle = raw;
+    subtitleEl.textContent = formatFavoritesModalSubtitle(raw);
+    subtitleEl.title = raw;
+    if (mobileSubtitleEl) {
+      mobileSubtitleEl.dataset.fullTitle = raw;
+      mobileSubtitleEl.textContent = formatFavoritesModalSubtitle(raw);
+      mobileSubtitleEl.title = raw;
+    }
+  }
+
+  function syncFavoritesSidebarState(modal) {
+    if (!modal) return;
+    const isMobile = isFavoritesModalMobileLayout();
+    if (!isMobile) favoritesSidebarDrawerOpen = false;
+    modal.classList.toggle('stcj-modal-mobile-layout', isMobile);
+    modal.classList.toggle('is-sidebar-collapsed', !isMobile && favoritesSidebarCollapsed);
+    modal.classList.toggle('is-sidebar-drawer-open', !!(isMobile && favoritesSidebarDrawerOpen));
+    updateFavoritesSidebarToggleButton(modal, isMobile);
+    updateFavoritesModalSubtitle(modal);
+  }
+
+  function toggleFavoritesSidebar(modal) {
+    if (isFavoritesModalMobileLayout()) {
+      favoritesSidebarDrawerOpen = !favoritesSidebarDrawerOpen;
+    } else {
+      favoritesSidebarCollapsed = !favoritesSidebarCollapsed;
+    }
+    syncFavoritesSidebarState(modal);
+  }
+
+  function closeFavoritesSidebarDrawer(modal) {
+    favoritesSidebarDrawerOpen = false;
+    syncFavoritesSidebarState(modal);
+  }
+
+  function ensureFavoritesModalResizeListener() {
+    if (ensureFavoritesModalResizeListener.bound) return;
+    const onResize = () => syncFavoritesSidebarState(document.getElementById(FAVORITES_MODAL_ID));
+    window.addEventListener('resize', onResize);
+    ensureFavoritesModalResizeListener.detach = () => window.removeEventListener('resize', onResize);
+    ensureFavoritesModalResizeListener.bound = true;
+  }
+
+  function getFavoritePreviewFrameId(favoriteId) {
+    return `stcj-preview-frame-${favoriteId}`;
+  }
+
+  function getMessageFormattingFn() {
+    if (typeof coreMessageFormatting === 'function') return coreMessageFormatting;
+
+    const formatter =
+      window.messageFormatting ||
+      globalThis.messageFormatting ||
+      window.SillyTavern?.messageFormatting;
+    return typeof formatter === 'function' ? formatter : null;
+  }
+
+  function applySillyTavernMessageFormatting(text, senderName, isUser, mesId) {
+    const raw = String(text ?? '');
+    if (!raw) return '';
+    const formatter = getMessageFormattingFn();
+    if (!formatter) return '';
+    try {
+      return String(formatter(raw, senderName || null, false, !!isUser, Number.isFinite(mesId) ? mesId : null, {}, false) || '');
+    } catch {
+      return '';
+    }
+  }
+
+  function sanitizeHtml(html) {
+    try {
+      if (window.DOMPurify?.sanitize) {
+        return window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = String(html ?? '');
+      const blockedTags = ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta'];
+      blockedTags.forEach((tag) => tpl.content.querySelectorAll(tag).forEach((node) => node.remove()));
+      tpl.content.querySelectorAll('*').forEach((el) => {
+        for (const attr of Array.from(el.attributes)) {
+          const name = attr.name.toLowerCase();
+          const value = String(attr.value || '').trim().toLowerCase();
+          if (name.startsWith('on')) el.removeAttribute(attr.name);
+          if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
+            el.removeAttribute(attr.name);
+          }
+        }
+      });
+      return tpl.innerHTML;
+    } catch {
+      return String(html ?? '');
+    }
+  }
+
+  function decorateFavoriteInlineSemantics(html) {
+    const raw = String(html ?? '');
+    if (!raw) return '';
+
+    try {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = raw;
+      const skipTags = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA', 'KBD', 'SAMP']);
+      const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          const value = String(node?.nodeValue || '');
+          if (!value || !/[“”"『』「」*]/.test(value)) return NodeFilter.FILTER_REJECT;
+          let parent = node.parentElement;
+          while (parent) {
+            if (skipTags.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+            parent = parent.parentElement;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+
+      const textNodes = [];
+      let current = walker.nextNode();
+      while (current) {
+        textNodes.push(current);
+        current = walker.nextNode();
+      }
+
+      const tokenRe = /("[^"\n]{1,500}"|“[^”\n]{1,500}”|『[^』\n]{1,500}』|「[^」\n]{1,500}」|\*[^*\n]{1,500}\*)/g;
+      textNodes.forEach((node) => {
+        const text = String(node.nodeValue || '');
+        tokenRe.lastIndex = 0;
+        if (!tokenRe.test(text)) return;
+        tokenRe.lastIndex = 0;
+        const frag = document.createDocumentFragment();
+        let lastIndex = 0;
+        text.replace(tokenRe, (match, _group, offset) => {
+          if (offset > lastIndex) frag.appendChild(document.createTextNode(text.slice(lastIndex, offset)));
+          if (match.startsWith('*') && match.endsWith('*')) {
+            const em = document.createElement('em');
+            em.className = 'stcj-inline-emphasis';
+            em.textContent = match.slice(1, -1);
+            frag.appendChild(em);
+          } else {
+            const span = document.createElement('span');
+            span.className = 'stcj-inline-quote';
+            span.textContent = match;
+            frag.appendChild(span);
+          }
+          lastIndex = offset + match.length;
+          return match;
+        });
+        if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+        node.parentNode?.replaceChild(frag, node);
+      });
+      return tpl.innerHTML;
+    } catch {
+      return raw;
+    }
+  }
+
+  async function importFavoritesRegexEngine() {
+    try {
+      return await eval('import("/scripts/extensions/regex/engine.js")');
+    } catch {
+      return null;
+    }
+  }
+
+  let favoritesRegexEnginePromise = null;
+  function getFavoritesRegexEngine() {
+    if (!favoritesRegexEnginePromise) favoritesRegexEnginePromise = importFavoritesRegexEngine();
+    return favoritesRegexEnginePromise;
+  }
+
+  async function applyFavoritesRegexPipeline(text, placement) {
+    const raw = String(text ?? '');
+    if (!raw) return '';
+
+    const api = window.ST_API;
+    if (api?.regexScript?.process) {
+      try {
+        const result = await api.regexScript.process({ text: raw, placement });
+        return String(result?.text ?? raw);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const engine = await getFavoritesRegexEngine();
+    if (!engine?.getScriptsByType || !engine?.SCRIPT_TYPES || !engine?.runRegexScript) return raw;
+
+    const options = { allowedOnly: true };
+    const scripts = [
+      ...(engine.getScriptsByType(engine.SCRIPT_TYPES.GLOBAL, options) || []),
+      ...(engine.getScriptsByType(engine.SCRIPT_TYPES.SCOPED, options) || []),
+      ...(engine.getScriptsByType(engine.SCRIPT_TYPES.PRESET, options) || []),
+    ];
+
+    let out = raw;
+    for (const script of scripts) {
+      try {
+        if (!script || script.disabled || script.promptOnly) continue;
+        const placements = Array.isArray(script.placement) ? script.placement : (typeof script.placement === 'number' ? [script.placement] : []);
+        if (placements.length && !placements.includes(placement)) continue;
+        out = engine.runRegexScript(script, out);
+      } catch {
+        /* ignore */
+      }
+    }
+    return out;
+  }
+
+  function buildFavoritePreviewSrcdoc(htmlBody, token, frameKey) {
+    const body = String(htmlBody ?? '');
+    const heightScript = `(() => {
+      const getHeight = () => {
+        const body = document.body;
+        const doc = document.documentElement;
+        if (!body || !doc) return 0;
+
+        const measuredNodes = Array.from(body.children || []).filter((node) => {
+          if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+          const style = window.getComputedStyle(node);
+          if (style.position === 'fixed' || style.position === 'absolute') return false;
+          return true;
+        });
+
+        let contentBottom = 0;
+        for (const node of measuredNodes) {
+          const rect = node.getBoundingClientRect();
+          if (!rect || !Number.isFinite(rect.bottom)) continue;
+          contentBottom = Math.max(contentBottom, rect.bottom);
+        }
+
+        const bodyRect = body.getBoundingClientRect();
+        const visualHeight = contentBottom > 0 && Number.isFinite(bodyRect.top)
+          ? Math.max(0, Math.ceil(contentBottom - bodyRect.top))
+          : 0;
+
+        return Math.max(
+          visualHeight,
+          Math.ceil(body.getBoundingClientRect().height || 0),
+          Math.ceil(doc.getBoundingClientRect().height || 0)
+        );
+      };
+
+      const send = () => {
+        const h = getHeight();
+        parent.postMessage({ type: 'stcj:favorites-preview-height', token: ${JSON.stringify(token)}, key: ${JSON.stringify(frameKey)}, height: h }, '*');
+      };
+      const ro = window.ResizeObserver ? new ResizeObserver(() => send()) : null;
+      if (ro) ro.observe(document.documentElement);
+      if (ro && document.body) ro.observe(document.body);
+      const mo = new MutationObserver(() => send());
+      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+      window.addEventListener('load', send);
+      setTimeout(send, 0); setTimeout(send, 50); setTimeout(send, 200); setTimeout(send, 500);
+    })();`;
+    return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><style>:root{color-scheme:dark;scrollbar-color:rgba(255,255,255,0.20) transparent;scrollbar-width:thin;}html,body{overflow-x:hidden;scrollbar-color:rgba(255,255,255,0.20) transparent;scrollbar-width:thin;}body{margin:0;padding:12px;font-family:var(--main-font,sans-serif);background:#111;color:#d4d4d4;line-height:1.6;}body::-webkit-scrollbar,pre::-webkit-scrollbar{width:8px;height:8px;}body::-webkit-scrollbar-track,pre::-webkit-scrollbar-track{background:transparent;}body::-webkit-scrollbar-thumb,pre::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.18);border-radius:999px;border:2px solid transparent;background-clip:padding-box;}body::-webkit-scrollbar-thumb:hover,pre::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.28);border:2px solid transparent;background-clip:padding-box;}img{max-width:100%;height:auto;}em,i,.stcj-inline-emphasis{color:#ffb55e;}u,ins{color:#4fc1ff;text-decoration-color:rgba(79,193,255,0.85);text-decoration-thickness:1.5px;text-underline-offset:2px;}.stcj-inline-quote{color:#58b6ff;}strong,b{color:#dcdcaa;}pre{overflow-x:hidden;overflow-y:auto;padding:8px 10px;background:#1e1e1e;border:1px solid #2d2d30;border-radius:8px;margin:6px 0;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:0.95em;color:#d4d4d4;box-shadow:inset 0 1px 0 rgba(255,255,255,0.02);}code{color:#ce9178;background:rgba(110,118,129,0.18);padding:0 4px;border-radius:4px;border:1px solid rgba(110,118,129,0.18);white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;}pre code{color:inherit;background:transparent;padding:0;border:none;border-radius:0;}a{color:#3794ff;text-decoration-color:rgba(55,148,255,0.72);text-underline-offset:2px;}a:hover{color:#4daafc;}table{border-collapse:collapse;}th,td{border:1px solid rgba(255,255,255,0.15);padding:6px 8px;}blockquote{border-left:3px solid #58b6ff;margin:8px 0;padding:10px 0 10px 12px;background:rgba(45,56,74,0.50);color:#b9e3ff;border-radius:0 10px 10px 0;}.stcj-preview-reasoning{margin:0 0 12px;border:1px solid rgba(88,182,255,0.18);background:rgba(37,37,38,0.92);}.stcj-preview-reasoning > summary{cursor:pointer;color:#c8dff5;font-weight:600;}.stcj-preview-reasoning-body{margin-top:8px;color:#d4d4d4;}</style><script>${heightScript}</script></head><body>${body}</body></html>`;
+  }
+
+  function ensureFavoritesPreviewMessageListener() {
+    if (favoritesPreviewMessageListenerAttached) return;
+    const onPreviewMessage = (event) => {
+      const data = event?.data;
+      if (!data || data.type !== 'stcj:favorites-preview-height') return;
+      if (data.token !== favoritesPreviewIframeToken) return;
+      const frame = document.getElementById(getFavoritePreviewFrameId(data.key));
+      if (!frame) return;
+      const height = Math.max(96, Math.round(Number(data.height) || 0));
+      frame.style.height = `${height}px`;
+    };
+    window.addEventListener('message', onPreviewMessage);
+    ensureFavoritesPreviewMessageListener.detach = () => {
+      try { window.removeEventListener('message', onPreviewMessage); } catch { /* ignore */ }
+    };
+    favoritesPreviewMessageListenerAttached = true;
+  }
+
+  async function prepareFavoritePreviewPayload(item, resolution) {
+    const message = resolution.status === 'missing' ? null : resolution.message;
+    const mesId = resolution.status === 'missing' ? item.messageId : resolution.mesId;
+    const snapshot = resolution.status === 'missing' ? null : resolveFavoriteMessageSnapshot(item, message);
+    const senderName = item.sender || message?.name || '未知发送者';
+    const isUser = !!message?.is_user;
+    const originalText = resolution.status === 'missing'
+      ? (item.previewText || '')
+      : String(snapshot?.matched ? snapshot.text : (item.previewText || snapshot?.text || ''));
+    const originalReasoning = resolution.status === 'missing' || !snapshot?.matched
+      ? ''
+      : String(snapshot.reasoning || '');
+    const rawText = await applyFavoritesRegexPipeline(originalText, 2);
+    const reasoningRaw = await applyFavoritesRegexPipeline(originalReasoning, 6);
+    const formattedHtml = applySillyTavernMessageFormatting(rawText, senderName, isUser, mesId);
+    const reasoningHtml = reasoningRaw ? applySillyTavernMessageFormatting(reasoningRaw, null, false, null) : '';
+    const processedPreviewHtml = formattedHtml
+      ? decorateFavoriteInlineSemantics(sanitizeHtml(formattedHtml))
+      : (rawText ? decorateFavoriteInlineSemantics(renderFavoriteMarkdown(rawText)) : '<div class="stcj-empty-copy">原消息内容不可用。</div>');
+    const processedReasoningHtml = reasoningHtml ? decorateFavoriteInlineSemantics(sanitizeHtml(reasoningHtml)) : '';
+    return {
+      rawText,
+      formattedHtml,
+      reasoningRaw,
+      reasoningHtml,
+      processedPreviewHtml,
+      processedReasoningHtml,
+      senderName,
+      isUser,
+      swipeIndex: snapshot?.swipeIndex ?? normalizeFavoriteSwipeIndex(item?.swipeIndex),
+      swipeMissing: !!snapshot?.swipeMissing,
+      mesId,
+      deleted: resolution.status === 'missing' || !!snapshot?.swipeMissing,
+    };
+  }
+
+  function buildFavoriteReasoningBlock(html, className = 'stcj-preview-reasoning') {
+    if (!html) return '';
+    return `<details class="${className}"><summary>思考了一会</summary><div class="${className}-body">${html}</div></details>`;
+  }
+
+  function renderFavoritePreviewMarkupByMode(mode, item, payload) {
+
+    if (mode === FAVORITES_PREVIEW_MODES.SWIPE_HTML) {
+      return {
+        html: `<iframe class="stcj-preview-iframe" id="${getFavoritePreviewFrameId(item.id)}" data-preview-frame-key="${item.id}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy"></iframe>`,
+        payload,
+      };
+    }
+
+    if (mode === FAVORITES_PREVIEW_MODES.STAR_MAIN) {
+      const reasoningBlock = payload.processedReasoningHtml
+        ? `<details class="fav-reasoning-details"><summary class="fav-reasoning-summary"><span>思考了一会</span><i class="fa-solid fa-chevron-down reasoning-arrow"></i></summary><div class="fav-reasoning-content">${payload.processedReasoningHtml}</div></details>`
+        : '';
+      const previewBody = payload.processedPreviewHtml;
+      return {
+        html: `<div class="stcj-star-preview favorite-item ${payload.isUser ? 'role-user' : 'role-ai'}">${reasoningBlock}<div class="fav-preview ${payload.deleted ? 'deleted' : ''}">${previewBody}</div></div>`,
+        payload,
+      };
+    }
+
+    const reasoningBlock = buildFavoriteReasoningBlock(payload.processedReasoningHtml);
+    const previewBody = payload.processedPreviewHtml;
+    return {
+      html: `<div class="stcj-swipe-preview-default">${reasoningBlock}${previewBody || '<div class="stcj-empty-copy">原消息内容不可用。</div>'}</div>`,
+      payload,
+    };
+  }
+
+  function ensureFavoritesDetailShell(mainList) {
+    if (!mainList) return null;
+    let preview = mainList.querySelector('.stcj-modal-detail-preview');
+    if (!preview) {
+      mainList.innerHTML = '<div class="stcj-modal-detail-preview prose"></div>';
+      preview = mainList.querySelector('.stcj-modal-detail-preview');
+    }
+    return {
+      preview,
+    };
+  }
+
+  function getFavoritesMainHeadRefs(modal) {
+    return {
+      title: modal?.querySelector('.stcj-modal-main-title'),
+      note: modal?.querySelector('.stcj-modal-main-note'),
+      actionButtons: modal?.querySelectorAll('.stcj-modal-main-actions [data-fav-id]'),
+    };
+  }
+
+  function setFavoritesSidebarActiveState(modal, favoriteId) {
+    modal?.querySelectorAll?.('.stcj-modal-sidebar-item[data-fav-id]').forEach((button) => {
+      button.classList.toggle('is-active', button.getAttribute('data-fav-id') === favoriteId);
+    });
+  }
+
+  function setFavoriteDetailPreviewLoading(modal) {
+    const mainList = modal?.querySelector('.stcj-modal-main-list');
+    const refs = ensureFavoritesDetailShell(mainList);
+    const previewEl = refs?.preview;
+    if (!previewEl) return;
+    previewEl.classList.add('is-loading');
+    previewEl.scrollTop = 0;
+    previewEl.innerHTML = `
+      <div class="stcj-preview-skeleton" aria-hidden="true">
+        <span class="stcj-preview-skeleton-line short"></span>
+        <span class="stcj-preview-skeleton-line"></span>
+        <span class="stcj-preview-skeleton-line"></span>
+        <span class="stcj-preview-skeleton-line medium"></span>
+        <span class="stcj-preview-skeleton-block"></span>
+      </div>
+    `;
+  }
+
+  function renderFavoritesSidebarList(modal, detailEntries) {
+    const sidebarList = modal?.querySelector('.stcj-modal-sidebar-list');
+    if (!sidebarList) return;
+
+    if (!detailEntries.length) {
+      sidebarList.innerHTML = '<div class="stcj-modal-empty">当前聊天还没有收藏。</div>';
+      return;
+    }
+
+    const sidebarEntries = sortFavoriteItems(detailEntries, favoritesModalSort);
+    sidebarList.innerHTML = sidebarEntries.map((entry, index) => {
+      const snapshot = getFavoriteResolvedSnapshot(entry.item, entry.resolution);
+      const floor = entry.resolution.status === 'missing' ? '未定位' : formatFloorLabel(entry.resolution.mesId);
+      const swipeIndex = getFavoriteResolvedSwipeIndex(entry.item, entry.resolution);
+      const summary = escapeHtml(getFavoriteListSummary(entry.item));
+      const currentBranchBadge = buildFavoriteCurrentBranchBadgeHtml(entry.item, entry.resolution, detailEntries);
+      const active = entry.item.id === favoritesModalActiveId ? 'is-active' : '';
+      const status = getFavoriteStatusLabel(entry.resolution.status, snapshot);
+      const statusHtml = status ? `<span class="stcj-modal-sidebar-status" title="${escapeHtml(getFavoriteStatusDescription(entry.resolution.status, snapshot) || status)}">${escapeHtml(status)}</span>` : '';
+      return `
+        <button class="stcj-modal-sidebar-item ${active}" data-action="focusFavoriteCard" data-fav-id="${entry.item.id}">
+          <span class="stcj-modal-sidebar-copy">
+            <span class="stcj-modal-sidebar-topline">
+              <span class="stcj-modal-order">${index + 1}</span>
+              <span class="stcj-modal-sidebar-floor">${escapeHtml(floor)}${buildFavoriteSwipeBadgeHtml(swipeIndex)}${currentBranchBadge}</span>
+            </span>
+            <span class="stcj-modal-sidebar-summary">${summary || '无备注'}</span>
+          </span>
+          ${statusHtml}
+        </button>
+      `;
+    }).join('');
+  }
+
+  function hydrateFavoritePreviewByMode(mode, container, previewEntries) {
+    if (!container) return;
+    ensureFavoritesPreviewMessageListener();
+
+    if (mode === FAVORITES_PREVIEW_MODES.SWIPE_HTML) {
+      previewEntries.forEach(({ entry, previewResult }) => {
+        const frame = document.getElementById(getFavoritePreviewFrameId(entry.item.id));
+        if (!frame) return;
+        const payload = previewResult.payload;
+        const reasoningBlock = buildFavoriteReasoningBlock(payload.processedReasoningHtml);
+        const previewBody = payload.processedPreviewHtml || '<div class="stcj-empty-copy">原消息内容不可用。</div>';
+        frame.style.height = '160px';
+        frame.setAttribute('srcdoc', buildFavoritePreviewSrcdoc(`${reasoningBlock}<div>${previewBody || '<div class="stcj-empty-copy">原消息内容不可用。</div>'}</div>`, favoritesPreviewIframeToken, entry.item.id));
+      });
+      return;
+    }
+
+    if (mode === FAVORITES_PREVIEW_MODES.STAR_MAIN) {
+      container.querySelectorAll('.stcj-star-preview').forEach((el) => renderHtmlCodeIframesInElement(el));
+    }
+  }
+
+  async function buildFavoritePreviewEntries(detailEntries, mode) {
+    const result = [];
+    for (const entry of detailEntries) {
+      // eslint-disable-next-line no-await-in-loop
+      const payload = await prepareFavoritePreviewPayload(entry.item, entry.resolution);
+      result.push({
+        entry,
+        previewResult: renderFavoritePreviewMarkupByMode(mode, entry.item, payload),
+      });
+    }
+    return result;
+  }
+
+  function renderHtmlCodeIframesInElement(container) {
+    if (!container) return;
+    container.querySelectorAll('pre').forEach((preEl) => {
+      const codeContent = preEl.textContent || '';
+      if (!codeContent.includes('<body') || !codeContent.includes('</body>')) return;
+      let srcdoc = codeContent;
+      const bridgeScript = `<script>(function(){try{['getContext','toastr','jQuery','$','_'].forEach(function(name){if(window.parent&&typeof window.parent[name]!=='undefined'){window[name]=window.parent[name];}});}catch(e){console.error('STCJ preview bridge error',e);}})();<\/script>`;
+      const headTagMatch = srcdoc.match(/<head\s*>/i);
+      if (headTagMatch) {
+        const injectionPoint = headTagMatch.index + headTagMatch[0].length;
+        srcdoc = srcdoc.slice(0, injectionPoint) + bridgeScript + srcdoc.slice(injectionPoint);
+      } else {
+        srcdoc = bridgeScript + srcdoc;
+      }
+      const iframe = document.createElement('iframe');
+      iframe.className = 'stcj-star-inline-iframe';
+      iframe.setAttribute('srcdoc', srcdoc);
+      iframe.addEventListener('load', () => {
+        try {
+          const contentWindow = iframe.contentWindow;
+          const body = contentWindow?.document?.body;
+          const head = contentWindow?.document?.head;
+          if (!body || !head) return;
+          const style = contentWindow.document.createElement('style');
+          style.innerHTML = 'body { margin: 0; overflow: hidden; }';
+          head.appendChild(style);
+          const updateHeight = () => { iframe.style.height = `${body.scrollHeight}px`; };
+          const observer = window.ResizeObserver ? new ResizeObserver(updateHeight) : null;
+          observer?.observe(body);
+          updateHeight();
+        } catch {
+          /* ignore */
+        }
+      });
+      preEl.replaceWith(iframe);
+    });
+  }
+
+
+  function getCurrentChatMessages() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      return Array.isArray(ctx?.chat) ? ctx.chat : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function ensureFavoritesMetadata() {
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (!ctx?.chatMetadata || typeof ctx.chatMetadata !== 'object') return null;
+      if (!Array.isArray(ctx.chatMetadata[FAVORITES_METADATA_KEY])) {
+        ctx.chatMetadata[FAVORITES_METADATA_KEY] = [];
+      }
+      return ctx.chatMetadata;
+    } catch {
+      return null;
+    }
+  }
+
+  function isFavoriteTextMatch(item, rawText) {
+    const normalizedText = normalizeFavoriteText(rawText);
+    if (!normalizedText) return false;
+    const textHash = computeTextHash(normalizedText);
+    if (item?.textHash && textHash === item.textHash) return true;
+    if (item?.previewText) {
+      const expected = normalizeFavoriteText(item.previewText).slice(0, 48);
+      const actual = normalizedText.slice(0, 48);
+      if (expected && actual && expected === actual) return true;
+    }
+    return false;
+  }
+
+  function isFavoriteMetadataMatch(item, message) {
+    return !!item
+      && !!message
+      && item.sendDate
+      && message?.send_date != null
+      && String(message.send_date) === String(item.sendDate)
+      && item.sender
+      && String(message?.name || '') === String(item.sender || '');
+  }
+
+  function resolveFavoriteMessageSnapshot(item, message) {
+    const storedSwipeIndex = normalizeFavoriteSwipeIndex(item?.swipeIndex);
+    if (!message) {
+      return {
+        text: String(item?.previewText || ''),
+        swipeIndex: storedSwipeIndex,
+        matched: false,
+        swipeMissing: false,
+        reasoning: '',
+        media: null,
+      };
+    }
+
+    const baseReasoning = message?.extra?.reasoning ? String(message.extra.reasoning) : '';
+    const swipeEntries = getMessageSwipeEntries(message);
+    const toSnapshot = (entry, matched = true, swipeMissing = false) => ({
+      text: String(entry?.text || ''),
+      swipeIndex: Number.isInteger(entry?.index) ? entry.index : -1,
+      matched,
+      swipeMissing,
+      reasoning: entry?.reasoning || baseReasoning,
+      media: entry?.media ?? message?.extra?.media ?? null,
+    });
+
+    if (swipeEntries.length) {
+      if (storedSwipeIndex >= 0 && storedSwipeIndex < swipeEntries.length) {
+        const storedEntry = swipeEntries[storedSwipeIndex];
+        if (isFavoriteTextMatch(item, storedEntry.text)) return toSnapshot(storedEntry, true, false);
+      }
+      const matchedEntry = swipeEntries.find((entry) => isFavoriteTextMatch(item, entry.text));
+      if (matchedEntry) return toSnapshot(matchedEntry, true, false);
+    }
+
+    const baseText = getMessageContentText(message);
+    if (isFavoriteTextMatch(item, baseText)) {
+      return {
+        text: baseText,
+        swipeIndex: swipeEntries.length ? getMessageCurrentSwipeIndex(message) : -1,
+        matched: true,
+        swipeMissing: false,
+        reasoning: baseReasoning,
+        media: message?.extra?.media ?? null,
+      };
+    }
+
+    const fallbackEntry = swipeEntries.length
+      ? (getMessageSwipeEntry(message, storedSwipeIndex >= 0 && storedSwipeIndex < swipeEntries.length ? storedSwipeIndex : getMessageCurrentSwipeIndex(message)) || swipeEntries[0])
+      : null;
+    return {
+      text: String(item?.previewText || fallbackEntry?.text || baseText || ''),
+      swipeIndex: storedSwipeIndex >= 0 ? storedSwipeIndex : (fallbackEntry ? fallbackEntry.index : -1),
+      matched: false,
+      swipeMissing: storedSwipeIndex >= 0,
+      reasoning: '',
+      media: fallbackEntry?.media ?? message?.extra?.media ?? null,
+    };
+  }
+
+  function normalizeFavoriteItem(item, index) {
+    const now = Date.now() + index;
+    const previewText = normalizeFavoriteText(item?.previewText || '');
+    const sendDate = item?.sendDate == null ? '' : String(item.sendDate);
+    return {
+      id: typeof item?.id === 'string' && item.id ? item.id : `stcj-fav-${now}-${index}`,
+      messageId: Math.max(0, Math.round(Number(item?.messageId) || 0)),
+      swipeIndex: normalizeFavoriteSwipeIndex(item?.swipeIndex),
+      note: String(item?.note || ''),
+      textHash: String(item?.textHash || ''),
+      previewText,
+      sender: String(item?.sender || ''),
+      sendDate,
+      createdAt: Number.isFinite(Number(item?.createdAt)) ? Number(item.createdAt) : now,
+      updatedAt: Number.isFinite(Number(item?.updatedAt)) ? Number(item.updatedAt) : now,
+    };
+  }
+
+  function applyFavoriteItemUpdate(item, mesId, message) {
+    if (!item || !message) return item;
+    const snapshot = resolveFavoriteMessageSnapshot(item, message);
+    const normalizedText = normalizeFavoriteText(snapshot.text || getMessageContentText(message) || '');
+    item.messageId = Math.max(0, Math.round(Number(mesId) || 0));
+    item.swipeIndex = normalizeFavoriteSwipeIndex(snapshot.swipeIndex);
+    if (normalizedText) {
+      item.previewText = normalizedText.slice(0, 160);
+      item.textHash = computeTextHash(normalizedText);
+    }
+    item.sender = String(message?.name || item.sender || '');
+    item.sendDate = message?.send_date == null ? '' : String(message.send_date);
+    item.updatedAt = Date.now();
+    return item;
+  }
+
+  function syncFavoriteItemsToMetadata() {
+    const metadata = ensureFavoritesMetadata();
+    if (!metadata) return false;
+    metadata[FAVORITES_METADATA_KEY] = favoriteItems.map((item, index) => normalizeFavoriteItem(item, index));
+    favoriteItems = metadata[FAVORITES_METADATA_KEY];
+    return true;
+  }
+
+  function persistFavoritesNow() {
+    if (favoritesSaveTimer) {
+      clearTimeout(favoritesSaveTimer);
+      favoritesSaveTimer = null;
+    }
+    if (!syncFavoriteItemsToMetadata()) return;
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      ctx?.saveMetadataDebounced?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function scheduleFavoritesSave() {
+    if (favoritesSaveTimer) clearTimeout(favoritesSaveTimer);
+    favoritesSaveTimer = setTimeout(() => {
+      favoritesSaveTimer = null;
+      persistFavoritesNow();
+    }, FAVORITES_SAVE_DEBOUNCE);
+  }
+
+  function touchFavoritesUI() {
+    const root = document.getElementById(ROOT_ID);
+    if (root) updateFavoritesUI(root);
+    if (favoritesModalOpen) renderFavoritesManager();
+  }
+
+  function refreshFavoritesFromMetadata() {
+    const metadata = ensureFavoritesMetadata();
+    favoriteItems = Array.isArray(metadata?.[FAVORITES_METADATA_KEY])
+      ? metadata[FAVORITES_METADATA_KEY].map((item, index) => normalizeFavoriteItem(item, index))
+      : [];
+    if (metadata) metadata[FAVORITES_METADATA_KEY] = favoriteItems;
+    if (favoriteQuickMenuId && !favoriteItems.some((item) => item.id === favoriteQuickMenuId)) {
+      favoriteQuickMenuId = null;
+    }
+    touchFavoritesUI();
+  }
+
+  function buildFavoriteItemFromMessage(mesId, message) {
+    const snapshot = getCurrentMessageSnapshot(message);
+    const normalizedText = normalizeFavoriteText(snapshot.text || getMessageContentText(message) || '');
+    const now = Date.now();
+    return {
+      id: `stcj-fav-${now}-${Math.random().toString(16).slice(2, 8)}`,
+      messageId: mesId,
+      swipeIndex: normalizeFavoriteSwipeIndex(snapshot.swipeIndex),
+      note: '',
+      textHash: computeTextHash(normalizedText),
+      previewText: normalizedText.slice(0, 160),
+      sender: String(message?.name || ''),
+      sendDate: message?.send_date == null ? '' : String(message.send_date),
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  function isFavoriteFingerprintMatch(item, message) {
+    if (!item || !message) return false;
+    return resolveFavoriteMessageSnapshot(item, message).matched;
+  }
+
+  function findFavoriteByRange(item, messages, start, end) {
+    const safeStart = clamp(start, 0, Math.max(0, messages.length - 1));
+    const safeEnd = clamp(end, 0, Math.max(0, messages.length - 1));
+    for (let i = safeStart; i <= safeEnd; i++) {
+      if (isFavoriteFingerprintMatch(item, messages[i])) {
+        return { mesId: i, message: messages[i], status: 'fallback' };
+      }
+    }
+    return null;
+  }
+
+  function resolveFavoriteTarget(item, messages = getCurrentChatMessages()) {
+    if (!item || !Array.isArray(messages) || !messages.length) {
+      return { mesId: item?.messageId ?? -1, message: null, status: 'missing' };
+    }
+
+    const exactId = Math.max(0, Math.min(messages.length - 1, Math.round(Number(item.messageId) || 0)));
+    const exactMessage = messages[exactId];
+    if (exactMessage && (isFavoriteFingerprintMatch(item, exactMessage) || isFavoriteMetadataMatch(item, exactMessage))) {
+      return { mesId: exactId, message: exactMessage, status: 'exact' };
+    }
+
+    const nearby = findFavoriteByRange(item, messages, exactId - 12, exactId + 12);
+    if (nearby) return nearby;
+
+    const full = findFavoriteByRange(item, messages, 0, messages.length - 1);
+    if (full) return full;
+
+    return { mesId: exactId, message: exactMessage || null, status: 'missing' };
+  }
+
+  function ensureFavoriteResolved(item, resolution) {
+    if (!item || !resolution?.message) return resolution;
+    if (resolution.status === 'missing') return resolution;
+    const snapshot = resolveFavoriteMessageSnapshot(item, resolution.message);
+    if (item.messageId === resolution.mesId
+      && resolution.status === 'exact'
+      && normalizeFavoriteSwipeIndex(item.swipeIndex) === normalizeFavoriteSwipeIndex(snapshot.swipeIndex)) return resolution;
+    applyFavoriteItemUpdate(item, resolution.mesId, resolution.message);
+    scheduleFavoritesSave();
+    return resolution;
+  }
+
+  function findFavoriteIndexByIdentity(candidate) {
+    return favoriteItems.findIndex((item) => {
+      if (String(item.id) === String(candidate.id)) return true;
+      if (item.messageId === candidate.messageId && item.textHash && candidate.textHash && item.textHash === candidate.textHash) return true;
+      if (item.sender && candidate.sender && item.sender === candidate.sender && item.sendDate && candidate.sendDate && item.sendDate === candidate.sendDate && item.textHash === candidate.textHash) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  function getFavoriteItemById(favoriteId) {
+    return favoriteItems.find((item) => item.id === favoriteId) || null;
+  }
+
+  function getRecentFavoriteItems() {
+    const recentItems = [...favoriteItems]
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, FAVORITES_RECENT_LIMIT);
+
+    return recentItems
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  }
+
+  function getFavoriteQuickLabel(item, resolution) {
+    const floorText = formatFloorLabel(resolution?.mesId ?? item.messageId);
+    const resolvedSwipeIndex = resolution?.message
+      ? resolveFavoriteMessageSnapshot(item, resolution.message).swipeIndex
+      : item?.swipeIndex;
+    const swipeText = formatFavoriteSwipeLabel(resolvedSwipeIndex);
+    const note = String(item?.note || '').trim();
+    const prefix = swipeText ? `${floorText} · ${swipeText}` : floorText;
+    return note ? `${prefix} · ${note}` : prefix;
+  }
+
+  function getFavoriteListSummary(item) {
+    const note = String(item?.note || '').trim();
+    if (note) return note;
+    return item?.previewText ? item.previewText.slice(0, 60) : '无备注';
+  }
+
+  function getFavoriteResolvedSnapshot(item, resolution) {
+    if (!resolution?.message || resolution.status === 'missing') return null;
+    return resolveFavoriteMessageSnapshot(item, resolution.message);
+  }
+
+  function getFavoriteResolvedSwipeIndex(item, resolution) {
+    return normalizeFavoriteSwipeIndex(getFavoriteResolvedSnapshot(item, resolution)?.swipeIndex ?? item?.swipeIndex);
+  }
+
+  function hasMultipleFavoriteSwipesOnSameFloor(item, resolution, detailEntries) {
+    if (!item || !resolution || !Array.isArray(detailEntries) || detailEntries.length < 2) return false;
+    const targetFloor = resolution.status === 'missing' ? item.messageId : resolution.mesId;
+    const swipeSet = new Set();
+
+    detailEntries.forEach((entry) => {
+      const entryFloor = entry?.resolution?.status === 'missing'
+        ? entry?.item?.messageId
+        : entry?.resolution?.mesId;
+      if (entryFloor !== targetFloor) return;
+      const swipeIndex = getFavoriteResolvedSwipeIndex(entry?.item, entry?.resolution);
+      if (swipeIndex >= 0) swipeSet.add(swipeIndex);
+    });
+
+    return swipeSet.size > 1;
+  }
+
+  function isFavoriteCurrentDisplayedSwipe(item, resolution) {
+    if (!resolution?.message || resolution.status === 'missing') return false;
+    const favoriteSwipeIndex = getFavoriteResolvedSwipeIndex(item, resolution);
+    const currentSwipeIndex = getMessageCurrentSwipeIndex(resolution.message);
+    return favoriteSwipeIndex >= 0 && currentSwipeIndex >= 0 && favoriteSwipeIndex === currentSwipeIndex;
+  }
+
+  function buildFavoriteCurrentBranchBadgeHtml(item, resolution, detailEntries) {
+    if (!hasMultipleFavoriteSwipesOnSameFloor(item, resolution, detailEntries)) return '';
+    if (!isFavoriteCurrentDisplayedSwipe(item, resolution)) return '';
+    return '<span class="stcj-current-branch-badge" title="当前聊天记录中实际展示的分支">当前分支</span>';
+  }
+
+  function getFavoriteStatusLabel(status, snapshot) {
+    if (status === 'missing') return '楼层失效';
+    if (snapshot?.swipeMissing) return '分支已删';
+    return '';
+  }
+
+  function getFavoriteStatusDescription(status, snapshot) {
+    if (status === 'missing') return '原收藏楼层已不存在或无法定位。';
+    if (snapshot?.swipeMissing) {
+      const swipeText = formatFavoriteSwipeLabel(snapshot.swipeIndex);
+      return swipeText
+        ? `原收藏的 ${swipeText} 已被删除或不存在，当前只能回退到该楼层。`
+        : '原收藏的分支已被删除或不存在，当前只能回退到该楼层。';
+    }
+    return '';
+  }
+
+  function getFavoriteSortModeLabel(mode) {
+    switch (mode) {
+      case 'floor_asc': return '楼层 ↑';
+      case 'floor_desc': return '楼层 ↓';
+      default: return '收藏顺序';
+    }
+  }
+
+  function sortFavoriteItems(items, mode) {
+    const list = [...items];
+    const pickItem = (entry) => entry?.item || entry;
+    const pickFloor = (entry) => entry?.resolution?.status === 'missing'
+      ? Number.MAX_SAFE_INTEGER
+      : (entry?.resolution?.mesId ?? pickItem(entry).messageId);
+    const pickSwipe = (entry) => {
+      const idx = getFavoriteResolvedSwipeIndex(pickItem(entry), entry?.resolution);
+      return idx >= 0 ? idx : Number.MAX_SAFE_INTEGER;
+    };
+    switch (mode) {
+      case 'floor_asc':
+        return list.sort((a, b) => pickFloor(a) - pickFloor(b)
+          || pickSwipe(a) - pickSwipe(b)
+          || pickItem(a).createdAt - pickItem(b).createdAt);
+      case 'floor_desc':
+        return list.sort((a, b) => pickFloor(b) - pickFloor(a)
+          || pickSwipe(b) - pickSwipe(a)
+          || pickItem(b).createdAt - pickItem(a).createdAt);
+      default:
+        return list.sort((a, b) => (pickItem(b).createdAt || 0) - (pickItem(a).createdAt || 0));
+    }
+  }
+
+  function buildFavoriteDetailEntries() {
+    const messages = getCurrentChatMessages();
+    return favoriteItems
+      .map((item) => {
+        const resolution = ensureFavoriteResolved(item, resolveFavoriteTarget(item, messages));
+        return {
+          item,
+          resolution,
+          floor: resolution.status === 'missing' ? Number.MAX_SAFE_INTEGER : resolution.mesId,
+        };
+      })
+      .sort((a, b) => a.floor - b.floor
+        || getFavoriteResolvedSwipeIndex(a.item, a.resolution) - getFavoriteResolvedSwipeIndex(b.item, b.resolution)
+        || a.item.createdAt - b.item.createdAt);
+  }
+
+  function addFavorite(mesId) {
+    const messages = getCurrentChatMessages();
+    const message = messages[mesId];
+    if (!message) return false;
+
+    const candidate = buildFavoriteItemFromMessage(mesId, message);
+    if (findFavoriteIndexByIdentity(candidate) >= 0) return false;
+
+    favoriteItems.unshift(candidate);
+    syncFavoriteItemsToMetadata();
+    scheduleFavoritesSave();
+    touchFavoritesUI();
+    return true;
+  }
+
+  function removeFavoriteById(favoriteId) {
+    const index = favoriteItems.findIndex((item) => item.id === favoriteId);
+    if (index < 0) return false;
+    favoriteItems.splice(index, 1);
+    if (favoriteQuickMenuId === favoriteId) favoriteQuickMenuId = null;
+    syncFavoriteItemsToMetadata();
+    scheduleFavoritesSave();
+    touchFavoritesUI();
+    return true;
+  }
+
+  function updateFavoriteNoteById(favoriteId, nextNote) {
+    const item = getFavoriteItemById(favoriteId);
+    if (!item) return false;
+    item.note = String(nextNote || '');
+    item.updatedAt = Date.now();
+    syncFavoriteItemsToMetadata();
+    scheduleFavoritesSave();
+    touchFavoritesUI();
+    return true;
+  }
+
+  async function promptFavoriteNote(initialValue = '') {
+    const tip = '编辑收藏备注';
+    let value = null;
+    try {
+      if (typeof window.SillyTavern?.callGenericPopup === 'function') {
+        value = await window.SillyTavern.callGenericPopup(tip, window.SillyTavern?.POPUP_TYPE?.INPUT, String(initialValue || ''));
+      }
+    } catch {
+      value = null;
+    }
+    if (typeof value !== 'string') {
+      value = window.prompt(tip, String(initialValue || ''));
+    }
+    return typeof value === 'string' ? value : null;
+  }
+
+  async function confirmFavoriteDelete(item) {
+    const label = getFavoriteQuickLabel(item, { mesId: item.messageId });
+    const tip = `确认删除收藏：${label} ？`;
+    let result = null;
+    try {
+      if (typeof window.SillyTavern?.callGenericPopup === 'function') {
+        result = await window.SillyTavern.callGenericPopup(tip, window.SillyTavern?.POPUP_TYPE?.CONFIRM);
+      }
+    } catch {
+      result = null;
+    }
+    if (typeof result === 'boolean') return result;
+    return window.confirm(tip);
+  }
+
+  async function editFavoriteNoteById(favoriteId) {
+    const item = getFavoriteItemById(favoriteId);
+    if (!item) return false;
+    const value = await promptFavoriteNote(item.note || '');
+    if (value == null) return false;
+    updateFavoriteNoteById(favoriteId, value);
+    toastSuccess(value ? '收藏备注已更新。' : '已清空收藏备注。');
+    return true;
+  }
+
+  async function deleteFavoriteByIdWithConfirm(favoriteId) {
+    const item = getFavoriteItemById(favoriteId);
+    if (!item) return false;
+    const confirmed = await confirmFavoriteDelete(item);
+    if (!confirmed) return false;
+    const removed = removeFavoriteById(favoriteId);
+    if (removed) toastInfo('收藏已删除。');
+    return removed;
+  }
+
+  async function jumpToFavoriteItemFromRecentList(item) {
+    if (!item) return false;
+    const resolution = ensureFavoriteResolved(item, resolveFavoriteTarget(item));
+    if (!resolution?.message || resolution.status === 'missing') {
+      toastWarn('未能在当前聊天中定位到该收藏对应的楼层。');
+      return false;
+    }
+    const existingEl = document.querySelector(`#chat .mes[mesid="${resolution.mesId}"]`);
+    if (!existingEl) {
+      return jumpToFavoriteItem(item, 'start');
+    }
+
+    const targetEl = document.querySelector(`#chat .mes[mesid="${resolution.mesId}"]`) || existingEl;
+    const winPos = captureWindowScroll();
+    scrollMessageInChat(targetEl, 'start', 'smooth');
+    restoreWindowScrollStable(winPos);
+    flashMessage(targetEl);
+    return true;
+  }
+
+  async function jumpToFavoriteItem(item, block = 'start') {
+    void block;
+    if (!item) return false;
+    const resolution = ensureFavoriteResolved(item, resolveFavoriteTarget(item));
+    if (!resolution?.message || resolution.status === 'missing') {
+      toastWarn('未能在当前聊天中定位到该收藏对应的楼层。');
+      return false;
+    }
+    const jumped = await showFloorRange(String(resolution.mesId));
+    if (!jumped) return false;
+    return true;
+  }
+
+  function removeFavoriteQuickMenuOverlay() {
+    document.getElementById(FAVORITE_QUICK_MENU_OVERLAY_ID)?.remove();
+  }
+
+  function positionFavoriteQuickMenuOverlay(menu, trigger) {
+    if (!menu || !trigger) return;
+    const margin = 8;
+    const gap = 6;
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    const canOpenRight = triggerRect.left + menuRect.width <= viewportWidth - margin;
+    const canOpenLeft = triggerRect.right - menuRect.width >= margin;
+    const canOpenDown = triggerRect.bottom + gap + menuRect.height <= viewportHeight - margin;
+    const canOpenUp = triggerRect.top - gap - menuRect.height >= margin;
+
+    let horizontal = 'left';
+    if (!canOpenLeft && canOpenRight) {
+      horizontal = 'right';
+    } else if (!canOpenLeft && !canOpenRight) {
+      const spaceLeft = Math.max(0, triggerRect.right - margin);
+      const spaceRight = Math.max(0, viewportWidth - margin - triggerRect.left);
+      horizontal = spaceRight > spaceLeft ? 'right' : 'left';
+    }
+
+    let vertical = 'down';
+    if (!canOpenDown && canOpenUp) {
+      vertical = 'up';
+    } else if (!canOpenDown && !canOpenUp) {
+      const spaceUp = Math.max(0, triggerRect.top - margin);
+      const spaceDown = Math.max(0, viewportHeight - margin - triggerRect.bottom);
+      vertical = spaceUp > spaceDown ? 'up' : 'down';
+    }
+
+    let left = horizontal === 'right'
+      ? triggerRect.left
+      : (triggerRect.right - menuRect.width);
+    let top = vertical === 'up'
+      ? (triggerRect.top - menuRect.height - gap)
+      : (triggerRect.bottom + gap);
+
+    if (left + menuRect.width > viewportWidth - margin) {
+      left = viewportWidth - margin - menuRect.width;
+    }
+    if (left < margin) left = margin;
+
+    if (top + menuRect.height > viewportHeight - margin) top = viewportHeight - margin - menuRect.height;
+    if (top < margin) top = margin;
+
+    menu.dataset.horizontal = horizontal;
+    menu.dataset.vertical = vertical;
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.visibility = 'visible';
+  }
+
+  function renderFavoriteQuickMenuOverlay() {
+    removeFavoriteQuickMenuOverlay();
+    if (!favoriteQuickMenuId) return;
+
+    const trigger = document.querySelector(`#${ROOT_ID} [data-favorite-menu-trigger="${String(favoriteQuickMenuId)}"]`);
+    if (!trigger) return;
+
+    const item = getFavoriteItemById(favoriteQuickMenuId);
+    if (!item) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = FAVORITE_QUICK_MENU_OVERLAY_ID;
+    overlay.className = 'stcj-fav-menu stcj-fav-menu-floating';
+    overlay.style.visibility = 'hidden';
+    overlay.innerHTML = `
+      <button type="button" class="stcj-fav-menu-item" data-favorite-menu-action="note" data-favorite-id="${item.id}">${ICONS.note}<span>备注</span></button>
+      <button type="button" class="stcj-fav-menu-item danger" data-favorite-menu-action="delete" data-favorite-id="${item.id}">${ICONS.trash}<span>删除</span></button>
+    `;
+
+    overlay.addEventListener('pointerup', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const menuAction = e.target?.closest?.('[data-favorite-menu-action]');
+      if (!menuAction) return;
+      const favoriteId = menuAction.getAttribute('data-favorite-id');
+      if (!favoriteId) return;
+      const action = menuAction.getAttribute('data-favorite-menu-action');
+      closeFavoriteQuickMenu();
+      if (action === 'note') {
+        await editFavoriteNoteById(favoriteId);
+      } else if (action === 'delete') {
+        await deleteFavoriteByIdWithConfirm(favoriteId);
+      }
+    });
+
+    document.body.appendChild(overlay);
+    positionFavoriteQuickMenuOverlay(overlay, trigger);
+  }
+
+  function closeFavoriteQuickMenu() {
+    removeFavoriteQuickMenuOverlay();
+    if (!favoriteQuickMenuId) return;
+    favoriteQuickMenuId = null;
+    const root = document.getElementById(ROOT_ID);
+    if (root) updateFavoritesUI(root);
+  }
+
+  function openFavoriteQuickMenu(favoriteId) {
+    favoriteQuickMenuId = favoriteQuickMenuId === favoriteId ? null : favoriteId;
+    const root = document.getElementById(ROOT_ID);
+    if (root) updateFavoritesUI(root);
+    if (favoriteQuickMenuId) renderFavoriteQuickMenuOverlay();
+  }
+
+  function getFavoritePanelElement(root = document.getElementById(ROOT_ID)) {
+    return root?.querySelector?.('.stcj-fav-panel') || null;
+  }
+
+  function getFavoritePanelViewportMetrics(panel) {
+    const rect = panel?.getBoundingClientRect?.();
+    const width = Math.max(0, rect?.width || panel?.offsetWidth || 0);
+    const height = Math.max(0, rect?.height || panel?.offsetHeight || 0);
+    const margin = 8;
+    return {
+      width,
+      height,
+      margin,
+      maxLeft: Math.max(0, window.innerWidth - width - margin * 2),
+      maxTop: Math.max(0, window.innerHeight - height - margin * 2),
+    };
+  }
+
+  function applyFavoritePanelViewportPosition(root, panel, viewportLeft, viewportTop, persist = false) {
+    if (!root || !panel) return;
+    const { width, height, margin, maxLeft, maxTop } = getFavoritePanelViewportMetrics(panel);
+    if (!width || !height) return;
+    const lockedWidth = Math.round(width);
+
+    const clampedLeft = clamp(Number(viewportLeft) || 0, margin, margin + maxLeft);
+    const clampedTop = clamp(Number(viewportTop) || 0, margin, margin + maxTop);
+    const rootRect = root.getBoundingClientRect();
+
+    panel.dataset.positionMode = 'custom';
+    root.dataset.favPanelDefaultSide = 'custom';
+    panel.style.width = `${lockedWidth}px`;
+    panel.style.left = `${Math.round(clampedLeft - rootRect.left)}px`;
+    panel.style.top = `${Math.round(clampedTop - rootRect.top)}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+
+    if (!persist) return;
+
+    settings.favPanelCustom = true;
+    settings.favPanelX = Math.round(clampedLeft);
+    settings.favPanelY = Math.round(clampedTop);
+    settings.favPanelRx = maxLeft > 0 ? clamp((clampedLeft - margin) / maxLeft, 0, 1) : 0;
+    settings.favPanelRy = maxTop > 0 ? clamp((clampedTop - margin) / maxTop, 0, 1) : 0;
+    saveSettings();
+  }
+
+  function applyFavoritePanelDefaultPosition(root, panel) {
+    if (!root || !panel) return;
+    panel.removeAttribute('data-position-mode');
+    panel.style.width = '';
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.right = '';
+    panel.style.bottom = '';
+
+    let side = 'bottom';
+    if (settings.orientation === 'vertical') {
+      const rootRect = root.getBoundingClientRect();
+      const { width } = getFavoritePanelViewportMetrics(panel);
+      const gap = 10;
+      const leftSpace = Math.max(0, rootRect.left - gap);
+      const rightSpace = Math.max(0, window.innerWidth - rootRect.right - gap);
+      if (rightSpace >= width && leftSpace < width) side = 'right';
+      else if (leftSpace >= width && rightSpace < width) side = 'left';
+      else side = rightSpace > leftSpace ? 'right' : 'left';
+    }
+
+    root.dataset.favPanelDefaultSide = side;
+  }
+
+  function applyFavoritePanelPosition(root, opts = {}) {
+    const panel = getFavoritePanelElement(root);
+    if (!root || !panel) return;
+    if (!favPanelOpen && !opts.force) return;
+
+    if (settings.favPanelCustom) {
+      const { margin, maxLeft, maxTop } = getFavoritePanelViewportMetrics(panel);
+      const viewportLeft = typeof settings.favPanelRx === 'number'
+        ? margin + settings.favPanelRx * maxLeft
+        : (typeof settings.favPanelX === 'number' ? settings.favPanelX : margin);
+      const viewportTop = typeof settings.favPanelRy === 'number'
+        ? margin + settings.favPanelRy * maxTop
+        : (typeof settings.favPanelY === 'number' ? settings.favPanelY : margin);
+      applyFavoritePanelViewportPosition(root, panel, viewportLeft, viewportTop, false);
+      return;
+    }
+
+    applyFavoritePanelDefaultPosition(root, panel);
+  }
+
+  function attachFavoritePanelDrag(root) {
+    const panel = getFavoritePanelElement(root);
+    const header = panel?.querySelector?.('.stcj-fav-header');
+    if (!panel || !header) return;
+
+    let dragState = null;
+    const DRAG_THRESHOLD = 4;
+
+    const finishDrag = (persist) => {
+      if (!dragState) return;
+      try { header.releasePointerCapture?.(dragState.pointerId); } catch { /* ignore */ }
+      if (persist && dragState.moved) {
+        persistFavoritePanelPosition(root, panel, dragState.left + dragState.dx, dragState.top + dragState.dy);
+      }
+      panel.classList.remove('stcj-fav-panel-dragging');
+      dragState = null;
+    };
+
+    header.addEventListener('pointerdown', (e) => {
+      if (!favPanelOpen) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.target?.closest?.('.stcj-fav-close')) return;
+
+      const rect = panel.getBoundingClientRect();
+      dragState = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        left: rect.left,
+        top: rect.top,
+        dx: 0,
+        dy: 0,
+        moved: false,
+      };
+      panel.classList.add('stcj-fav-panel-dragging');
+      try { header.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    header.addEventListener('pointermove', (e) => {
+      if (!dragState || dragState.pointerId !== e.pointerId) return;
+      dragState.dx = e.clientX - dragState.startX;
+      dragState.dy = e.clientY - dragState.startY;
+      if (!dragState.moved) {
+        if (Math.hypot(dragState.dx, dragState.dy) < DRAG_THRESHOLD) return;
+        dragState.moved = true;
+      }
+      applyFavoritePanelViewportPosition(root, panel, dragState.left + dragState.dx, dragState.top + dragState.dy, false);
+      e.preventDefault();
+    });
+
+    header.addEventListener('pointerup', (e) => {
+      if (!dragState || dragState.pointerId !== e.pointerId) return;
+      finishDrag(true);
+      e.preventDefault();
+    });
+
+    header.addEventListener('pointercancel', () => finishDrag(false));
+  }
+
+  function persistFavoritePanelPosition(root, panel, viewportLeft, viewportTop) {
+    applyFavoritePanelViewportPosition(root, panel, viewportLeft, viewportTop, true);
+  }
+
+  function ensureFavoritesModalRoot() {
+    let modal = document.getElementById(FAVORITES_MODAL_ID);
+    if (modal) return modal;
+
+    modal = document.createElement('div');
+    modal.id = FAVORITES_MODAL_ID;
+    modal.className = 'stcj-modal-overlay';
+    modal.innerHTML = `
+      <div class="stcj-modal-shell">
+        <div class="stcj-modal-header">
+          <div class="stcj-modal-title-wrap">
+            <button class="stcj-modal-title-icon stcj-modal-sidebar-toggle" data-action="toggleFavoritesSidebar" title="收起索引" aria-label="收起索引" aria-expanded="true"></button>
+            <div>
+              <div class="stcj-modal-subtitle">当前聊天 · 左侧索引 / 右侧详情</div>
+              <div class="stcj-modal-title">收藏 · 共 0 条</div>
+            </div>
+          </div>
+          <div class="stcj-modal-actions">
+            <div class="stcj-modal-preview-switch-wrap">
+              <span>预览模式</span>
+              <div class="stcj-modal-preview-switch"></div>
+            </div>
+          </div>
+          <button class="stcj-modal-close" data-action="closeFavoritesManager" title="关闭">${ICONS.close}</button>
+        </div>
+        <div class="stcj-modal-body">
+          <button class="stcj-modal-sidebar-backdrop" type="button" data-action="closeFavoritesSidebar" aria-label="关闭索引抽屉"></button>
+          <aside class="stcj-modal-sidebar">
+            <div class="stcj-modal-sidebar-head">
+              <div class="stcj-modal-sidebar-mobile-summary" aria-hidden="true">
+                <span class="stcj-modal-sidebar-mobile-title">收藏</span>
+                <span class="stcj-modal-sidebar-mobile-subtitle">当前聊天</span>
+              </div>
+              <div class="stcj-modal-sort-wrap"></div>
+            </div>
+            <div class="stcj-modal-sidebar-list"></div>
+          </aside>
+          <main class="stcj-modal-main">
+            <div class="stcj-modal-main-head">
+              <div class="stcj-modal-main-info">
+                <div class="stcj-modal-main-title">详情预览</div>
+                <div class="stcj-modal-main-note" hidden></div>
+              </div>
+              <div class="stcj-modal-card-actions stcj-modal-main-actions">
+                <button class="stcj-modal-card-btn" data-action="favoriteJump" data-fav-id="" title="跳转到楼层">${ICONS.arrowUpRight}<span>跳转</span></button>
+                <button class="stcj-modal-card-btn" data-action="favoriteEditNote" data-fav-id="" title="编辑备注">${ICONS.note}<span>备注</span></button>
+                <button class="stcj-modal-card-btn danger" data-action="favoriteDelete" data-fav-id="" title="删除收藏">${ICONS.trash}<span>删除</span></button>
+              </div>
+            </div>
+            <div class="stcj-modal-main-list"></div>
+          </main>
+        </div>
+      </div>
+    `;
+
+    modal.addEventListener('click', async (e) => {
+      if (e.target === modal) {
+        closeFavoritesManager();
+        return;
+      }
+
+      const actionEl = e.target?.closest?.('[data-action]');
+      const action = actionEl?.getAttribute('data-action');
+      if (!action) return;
+
+      if (action === 'closeFavoritesManager') {
+        closeFavoritesManager();
+        return;
+      }
+      if (action === 'toggleFavoritesSidebar') {
+        toggleFavoritesSidebar(modal);
+        return;
+      }
+      if (action === 'closeFavoritesSidebar') {
+        closeFavoritesSidebarDrawer(modal);
+        return;
+      }
+      if (action === 'setFavoritesPreviewMode') {
+        favoritesPreviewMode = normalizeFavoritePreviewMode(actionEl.getAttribute('data-preview-mode'));
+        saveFavoritesPreviewMode(favoritesPreviewMode);
+        setFavoriteDetailPreviewLoading(modal);
+        await renderFavoritesManager();
+        return;
+      }
+      if (action === 'setFavoritesSortMode') {
+        favoritesModalSort = normalizeFavoriteSortMode(actionEl.getAttribute('data-sort-mode'));
+        const sortWrapEl = modal.querySelector('.stcj-modal-sort-wrap');
+        if (sortWrapEl) sortWrapEl.innerHTML = buildFavoriteSortModeSwitchHtml();
+        const detailEntries = buildFavoriteDetailEntries();
+        renderFavoritesSidebarList(modal, detailEntries);
+        setFavoritesSidebarActiveState(modal, favoritesModalActiveId);
+        syncFavoritesSidebarState(modal);
+        return;
+      }
+      if (action === 'focusFavoriteCard') {
+        const favoriteId = actionEl.getAttribute('data-fav-id');
+        if (!favoriteId) return;
+        favoritesModalActiveId = favoriteId;
+        setFavoritesSidebarActiveState(modal, favoriteId);
+        setFavoriteDetailPreviewLoading(modal);
+        await renderFavoritesManager();
+        return;
+      }
+
+      const favoriteId = actionEl.getAttribute('data-fav-id');
+      if (!favoriteId) return;
+
+      if (action === 'favoriteJump') {
+        const item = getFavoriteItemById(favoriteId);
+        const jumped = await jumpToFavoriteItem(item, 'start');
+        if (jumped) closeFavoritesManager();
+        return;
+      }
+
+      if (action === 'favoriteEditNote') {
+        await editFavoriteNoteById(favoriteId);
+        return;
+      }
+
+      if (action === 'favoriteDelete') {
+        await deleteFavoriteByIdWithConfirm(favoriteId);
+      }
+    });
+
+    ensureFavoritesModalResizeListener();
+    syncFavoritesSidebarState(modal);
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function closeFavoritesManager() {
+    favoritesModalOpen = false;
+    favoritesSidebarDrawerOpen = false;
+    const modal = document.getElementById(FAVORITES_MODAL_ID);
+    syncFavoritesSidebarState(modal);
+    modal?.classList.remove('is-open');
+  }
+
+  async function renderFavoritesManager() {
+    const modal = ensureFavoritesModalRoot();
+    if (!modal) return;
+    syncFavoritesSidebarState(modal);
+    const renderSeq = ++favoritesRenderSeq;
+    favoritesModalSort = normalizeFavoriteSortMode(favoritesModalSort);
+    const previewMode = normalizeFavoritePreviewMode(favoritesPreviewMode);
+
+    const detailEntries = buildFavoriteDetailEntries();
+    const sidebarList = modal.querySelector('.stcj-modal-sidebar-list');
+    const mainList = modal.querySelector('.stcj-modal-main-list');
+    const headerTitleEl = modal.querySelector('.stcj-modal-title');
+    const sortWrapEl = modal.querySelector('.stcj-modal-sort-wrap');
+    const subtitleEl = modal.querySelector('.stcj-modal-subtitle');
+    const previewSwitchEl = modal.querySelector('.stcj-modal-preview-switch');
+    const mobileSummaryTitleEl = modal.querySelector('.stcj-modal-sidebar-mobile-title');
+    const headRefs = getFavoritesMainHeadRefs(modal);
+
+    const modalTitleText = `收藏 · 共 ${favoriteItems.length} 条`;
+    if (headerTitleEl) headerTitleEl.textContent = modalTitleText;
+    if (mobileSummaryTitleEl) mobileSummaryTitleEl.textContent = modalTitleText;
+    if (sortWrapEl) sortWrapEl.innerHTML = buildFavoriteSortModeSwitchHtml();
+    if (previewSwitchEl) previewSwitchEl.innerHTML = buildFavoritePreviewModeSwitchHtml();
+    if (headRefs.title) headRefs.title.textContent = `详情预览 · ${getFavoritePreviewModeLabel(previewMode)}`;
+    if (headRefs.note) { headRefs.note.hidden = true; headRefs.note.textContent = ''; }
+
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      const chatName = ctx?.chatId || ctx?.chatName || ctx?.chat_file_name || '当前聊天';
+      updateFavoritesModalSubtitle(modal, chatName);
+    } catch {
+      updateFavoritesModalSubtitle(modal, '当前聊天');
+    }
+
+    if (!detailEntries.length) {
+      if (sidebarList) sidebarList.innerHTML = '<div class="stcj-modal-empty">当前聊天还没有收藏。</div>';
+      if (mainList) mainList.innerHTML = '<div class="stcj-modal-empty">点击悬浮条 📌 进入点选收藏，或使用聊天中的快速跳转。</div>';
+      return;
+    }
+
+    if (mainList) mainList.classList.add('is-single-view');
+    if (!favoritesModalActiveId || !detailEntries.some((entry) => entry.item.id === favoritesModalActiveId)) {
+      favoritesModalActiveId = detailEntries[0].item.id;
+    }
+
+    const activeEntry = detailEntries.find((entry) => entry.item.id === favoritesModalActiveId) || detailEntries[0];
+    if (activeEntry && headRefs.title) {
+      const activeSnapshot = getFavoriteResolvedSnapshot(activeEntry.item, activeEntry.resolution);
+      const activeFloor = activeEntry.resolution.status === 'missing' ? '未定位楼层' : formatFloorLabel(activeEntry.resolution.mesId);
+      const activeSwipe = formatFavoriteSwipeLabel(activeSnapshot?.swipeIndex ?? activeEntry.item.swipeIndex);
+      const activeSendDate = formatFavoriteTimestamp(activeEntry.item.sendDate || activeEntry.resolution.message?.send_date || '');
+      const statusLabel = getFavoriteStatusLabel(activeEntry.resolution.status, activeSnapshot);
+      headRefs.title.textContent = `${activeFloor}${activeSwipe ? ` · ${activeSwipe}` : ''} · ${activeSendDate}${statusLabel ? ` · ${statusLabel}` : ''}`;
+    }
+
+    renderFavoritesSidebarList(modal, detailEntries);
+
+    if (mainList) {
+      const previewEntries = await buildFavoritePreviewEntries(activeEntry ? [activeEntry] : [], previewMode);
+      if (renderSeq !== favoritesRenderSeq) return;
+
+      if (!previewEntries.length) {
+        mainList.innerHTML = '<div class="stcj-modal-empty">当前收藏内容不可用。</div>';
+        return;
+      }
+
+      const { entry, previewResult } = previewEntries[0];
+      const { item, resolution } = entry;
+      const refs = ensureFavoritesDetailShell(mainList);
+      if (!refs?.preview) return;
+
+      const note = String(item.note || '').trim();
+      const previewHtml = previewResult.html || '<div class="stcj-empty-copy">原消息内容不可用。</div>';
+      if (headRefs.note) {
+        if (note) {
+          headRefs.note.hidden = false;
+          headRefs.note.textContent = note;
+        } else {
+          headRefs.note.hidden = true;
+          headRefs.note.textContent = '';
+        }
+      }
+
+      headRefs.actionButtons?.forEach((button) => {
+        button.setAttribute('data-fav-id', item.id);
+      });
+
+      refs.preview.classList.remove('is-loading');
+      refs.preview.innerHTML = previewHtml;
+      mainList.scrollTop = 0;
+      hydrateFavoritePreviewByMode(previewMode, mainList, previewEntries);
+    }
+  }
+
+  function openFavoritesManager(targetId = null) {
+    favoritesModalOpen = true;
+    if (targetId) favoritesModalActiveId = targetId;
+    if (isFavoritesModalMobileLayout()) {
+      favoritesSidebarDrawerOpen = false;
+    }
+    const modal = ensureFavoritesModalRoot();
+    syncFavoritesSidebarState(modal);
+    renderFavoritesManager();
+    modal?.classList.add('is-open');
+  }
+
+  function closeFavPanel() {
+    closeFavoriteQuickMenu();
+    setPinMode(false);
+    setFavPanelOpen(false);
+  }
+
+  function updateFavoritesUI(root) {
+    const managerBtn = root.querySelector('.stcj-btn.stcj-favorites-manager');
+    if (managerBtn) managerBtn.setAttribute('data-count', String(favoriteItems.length));
+
+    root.classList.toggle('stcj-fav-open', favPanelOpen);
+    updateFavPanelToggleButton(root);
+
+    const hint = root.querySelector('.stcj-fav-hint');
+    if (hint) {
+      if (favoriteItems.length > 0 && !pinMode) {
+        hint.style.display = '';
+        hint.textContent = `显示最近 ${Math.min(FAVORITES_RECENT_LIMIT, favoriteItems.length)} 条收藏；更多请点击 📂 打开收藏管理器。`;
+      } else {
+        hint.style.display = '';
+        hint.textContent = pinMode
+          ? '点选楼层收藏：点击聊天中的目标楼层（ESC 退出点选）'
+          : '点击 📌 进入点选收藏；点击 📂 打开收藏管理器。';
+      }
+    }
+
+    const list = root.querySelector('.stcj-fav-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!favoriteItems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'stcj-fav-empty';
+      empty.textContent = '暂无收藏（当前聊天永久保存）';
+      list.appendChild(empty);
+      return;
+    }
+
+    const recentItems = getRecentFavoriteItems();
+    recentItems.forEach((favItem) => {
+      const resolution = ensureFavoriteResolved(favItem, resolveFavoriteTarget(favItem));
+      const snapshot = getFavoriteResolvedSnapshot(favItem, resolution);
+      const row = document.createElement('div');
+      row.className = 'stcj-fav-item';
+      row.setAttribute('data-favorite-id', String(favItem.id));
+      row.title = getFavoriteStatusDescription(resolution.status, snapshot)
+        || (resolution.status === 'missing'
+          ? '未能在当前聊天中定位该收藏楼层'
+          : `mesid=${resolution.mesId}`);
+
+      const floor = document.createElement('div');
+      floor.className = 'stcj-fav-floor stcj-fav-item-main';
+      const floorText = formatFloorLabel(resolution?.mesId ?? favItem.messageId);
+      const swipeIndex = getFavoriteResolvedSwipeIndex(favItem, resolution);
+      const statusText = getFavoriteStatusLabel(resolution.status, snapshot);
+      const note = String(favItem.note || '').trim();
+      floor.innerHTML = `
+        <span class="stcj-fav-item-topline">
+          <span class="stcj-fav-floor-label">${escapeHtml(floorText)}</span>
+          ${buildFavoriteSwipeBadgeHtml(swipeIndex)}
+          ${statusText ? `<span class="stcj-fav-status" title="${escapeHtml(getFavoriteStatusDescription(resolution.status, snapshot) || statusText)}">${escapeHtml(statusText)}</span>` : ''}
+        </span>
+        ${note ? `<span class="stcj-fav-note">${escapeHtml(note)}</span>` : ''}
+      `;
+
+      const ops = document.createElement('div');
+      ops.className = 'stcj-fav-item-ops';
+
+      const menuBtn = document.createElement('button');
+      menuBtn.type = 'button';
+      menuBtn.className = 'stcj-fav-menu-btn';
+      menuBtn.setAttribute('data-favorite-menu-trigger', favItem.id);
+      menuBtn.title = '更多操作';
+      setIcon(menuBtn, 'more');
+      ops.appendChild(menuBtn);
+      menuBtn.setAttribute('aria-expanded', favoriteQuickMenuId === favItem.id ? 'true' : 'false');
+
+      row.appendChild(floor);
+      row.appendChild(ops);
+      list.appendChild(row);
+    });
+
+    if (favoriteItems.length > FAVORITES_RECENT_LIMIT) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'stcj-fav-more';
+      more.setAttribute('data-favorite-open-manager', 'true');
+      more.textContent = `查看全部 ${favoriteItems.length} 条收藏`;
+      list.appendChild(more);
+    }
+
+    renderFavoriteQuickMenuOverlay();
+    if (favPanelOpen) requestAnimationFrame(() => applyFavoritePanelPosition(root, { force: true }));
+  }
+
+  function bindFavoritesPanel(root) {
+    const panel = root.querySelector('.stcj-fav-panel');
+    if (!panel) return;
+
+    panel.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    const closeBtn = panel.querySelector('.stcj-fav-close');
+    closeBtn?.addEventListener('pointerup', (e) => {
+      if (isDragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeFavPanel();
+    });
+
+    panel.addEventListener('scroll', () => {
+      closeFavoriteQuickMenu();
+    }, { passive: true });
+
+    panel.addEventListener('pointerup', async (e) => {
+      if (isDragging) return;
+
+      const managerBtn = e.target?.closest?.('[data-favorite-open-manager]');
+      if (managerBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFavoritesManager();
+        return;
+      }
+
+      const menuTrigger = e.target?.closest?.('[data-favorite-menu-trigger]');
+      if (menuTrigger) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFavoriteQuickMenu(menuTrigger.getAttribute('data-favorite-menu-trigger'));
+        return;
+      }
+
+      const favoriteRow = e.target?.closest?.('.stcj-fav-item');
+      if (!favoriteRow) return;
+
+      const favoriteId = favoriteRow.getAttribute('data-favorite-id');
+      if (!favoriteId) return;
+
+      const favoriteItem = getFavoriteItemById(favoriteId);
+      if (!favoriteItem) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      await jumpToFavoriteItemFromRecentList(favoriteItem);
+    });
+  }
+
+
   function setFavPanelOpen(open) {
     favPanelOpen = !!open;
 
     const root = document.getElementById(ROOT_ID);
     if (root) {
       root.classList.toggle('stcj-fav-open', favPanelOpen);
+      const panel = getFavoritePanelElement(root);
+      if (panel) panel.setAttribute('aria-hidden', favPanelOpen ? 'false' : 'true');
       updateFavPanelToggleButton(root);
       updateFavoritesUI(root);
+      if (favPanelOpen) requestAnimationFrame(() => applyFavoritePanelPosition(root, { force: true }));
     }
 
     // 关闭面板时一并退出点选模式
@@ -1893,140 +4265,22 @@
     if (pinMode) toastInfo('点选收藏：请点击要收藏的楼层（按 ESC 退出）');
   }
 
-  function closeFavPanel() {
-    setPinMode(false);
-    setFavPanelOpen(false);
-  }
-
-  function hasFavorite(mesId) {
-    return favoriteMesIds.includes(mesId);
-  }
-
-  function addFavorite(mesId) {
-    if (hasFavorite(mesId)) return false;
-    favoriteMesIds.push(mesId);
-    favoriteMesIds.sort((a, b) => a - b);
-    return true;
-  }
-
-  function removeFavorite(mesId) {
-    const idx = favoriteMesIds.indexOf(mesId);
-    if (idx < 0) return false;
-    favoriteMesIds.splice(idx, 1);
-    return true;
-  }
-
-  function toggleFavorite(mesId) {
-    if (hasFavorite(mesId)) {
-      removeFavorite(mesId);
-      return false;
-    }
-
-    addFavorite(mesId);
-    return true;
-  }
-
-  function updateFavoritesUI(root) {
-    const pinBtn = root.querySelector('.stcj-btn.stcj-pin');
-    if (pinBtn) pinBtn.setAttribute('data-count', String(favoriteMesIds.length));
-
-    root.classList.toggle('stcj-fav-open', favPanelOpen);
-
-    const hint = root.querySelector('.stcj-fav-hint');
-    if (hint) {
-      if (favoriteMesIds.length > 0 && !pinMode) {
-        // 已有收藏楼层且非点选模式时，隐藏说明文字
-        hint.style.display = 'none';
-      } else {
-        hint.style.display = '';
-        hint.textContent = pinMode
-          ? '点选楼层收藏：点击聊天中的目标楼层（ESC 退出点选）'
-          : '点击 📌 进入点选收藏；点击条目可跳转到该楼层顶部';
-      }
-    }
-
-    const list = root.querySelector('.stcj-fav-list');
-    if (!list) return;
-    list.innerHTML = '';
-
-    if (!favoriteMesIds.length) {
-      const empty = document.createElement('div');
-      empty.className = 'stcj-fav-empty';
-      empty.textContent = '暂无收藏（仅本页临时有效）';
-      list.appendChild(empty);
-      return;
-    }
-
-    favoriteMesIds.forEach((mesId) => {
-      const item = document.createElement('div');
-      item.className = 'stcj-fav-item';
-      item.setAttribute('data-mesid', String(mesId));
-      item.title = `mesid=${mesId}`;
-
-      const floor = document.createElement('div');
-      floor.className = 'stcj-fav-floor';
-      floor.textContent = formatFloorLabel(mesId);
-
-      const remove = document.createElement('div');
-      remove.className = 'stcj-fav-remove';
-      remove.title = '移除';
-      setIcon(remove, 'close');
-
-      item.appendChild(floor);
-      item.appendChild(remove);
-      list.appendChild(item);
-    });
-  }
-
-  function bindFavoritesPanel(root) {
-    const panel = root.querySelector('.stcj-fav-panel');
-    if (!panel) return;
-
-    // 禁止长按/右键菜单
-    panel.addEventListener('contextmenu', (e) => e.preventDefault());
-
-    const closeBtn = panel.querySelector('.stcj-fav-close');
-    closeBtn?.addEventListener('pointerup', (e) => {
-      if (isDragging) return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeFavPanel();
-    });
-
-    panel.addEventListener('pointerup', async (e) => {
-      if (isDragging) return;
-
-      const removeBtn = e.target?.closest?.('.stcj-fav-remove');
-      if (removeBtn) {
-        const item = removeBtn.closest('.stcj-fav-item');
-        const mesId = parseInt(item?.getAttribute('data-mesid') || '', 10);
-        if (!Number.isNaN(mesId)) {
-          removeFavorite(mesId);
-          updateFavoritesUI(root);
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      const item = e.target?.closest?.('.stcj-fav-item');
-      if (!item) return;
-
-      const mesId = parseInt(item.getAttribute('data-mesid') || '', 10);
-      if (Number.isNaN(mesId)) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      await jumpToMessage(mesId, 'start');
-    });
-  }
 
   function bindRootOutsideClose(root) {
-    // 取消“点击外部自动关闭收藏列表”的行为（用户反馈不方便）。
-    // 保留函数结构，避免旧逻辑调用时报错；返回空清理函数。
+    const onPointerDown = (e) => {
+      if (root.contains(e.target)) return;
+      if (document.getElementById(FAVORITES_MODAL_ID)?.contains(e.target)) return;
+      if (document.getElementById(FAVORITE_QUICK_MENU_OVERLAY_ID)?.contains(e.target)) return;
+      closeFavoriteQuickMenu();
+    };
+
+    document.addEventListener('pointerdown', onPointerDown, true);
     return () => {
-      /* noop */
+      try {
+        document.removeEventListener('pointerdown', onPointerDown, true);
+      } catch {
+        /* ignore */
+      }
     };
   }
 
@@ -2063,11 +4317,10 @@
     e.stopPropagation();
     e.stopImmediatePropagation?.();
 
-    const added = toggleFavorite(mesId);
+    const added = addFavorite(mesId);
     if (root) updateFavoritesUI(root);
 
     if (added) toastSuccess(`已收藏：${formatFloorLabel(mesId)}`);
-    else toastInfo(`已取消收藏：${formatFloorLabel(mesId)}`);
 
     // 阻止本次点击（click 事件）继续触发酒馆自身逻辑
     suppressNextChatClick = true;
@@ -2153,19 +4406,24 @@
     }
   }
 
-  function resetTempFavorites(reason) {
-    const hadAny = favoriteMesIds.length > 0;
+  function resetTempFavorites(reason, options) {
+    const clearRange = !!options?.clearRange;
 
-    favoriteMesIds = [];
     setPinMode(false);
     setFavPanelOpen(false);
-    setActiveRange(null);
+    closeFavoriteQuickMenu();
+    if (clearRange) setActiveRange(null);
     clearQuickEditState();
+
+    favoriteSyncSeq += 1;
+    refreshFavoritesFromMetadata();
 
     const root = document.getElementById(ROOT_ID);
     if (root) updateFavoritesUI(root);
 
-    if (hadAny) toastInfo(`聊天已切换：临时收藏已清空${reason ? `（${reason}）` : ''}`);
+    if (favoritesModalOpen) {
+      renderFavoritesManager();
+    }
   }
 
   function attachChatChangeListeners() {
@@ -2175,7 +4433,7 @@
       const et = ctx?.event_types;
       if (!es || !et) return null;
 
-      const handler = () => resetTempFavorites('event');
+      const handler = () => resetTempFavorites('event', { clearRange: true });
 
       const keys = [
         'CHAT_CHANGED',
@@ -2233,7 +4491,7 @@
           lastChatKey = key;
           lastChatRef = ref;
           lastChatLen = len;
-          resetTempFavorites('key');
+          resetTempFavorites('key', { clearRange: true });
           return;
         }
         if (!lastChatKey && key) lastChatKey = key;
@@ -2243,7 +4501,8 @@
           lastChatKey = key || lastChatKey;
           lastChatRef = ref;
           lastChatLen = len;
-          resetTempFavorites('ref');
+          // chat 数组引用变化噪声较大（编辑/刷新时也可能变化），这里只清理收藏，不动区间视图
+          resetTempFavorites('ref', { clearRange: false });
           return;
         }
         if (!lastChatRef && ref) lastChatRef = ref;
@@ -2254,12 +4513,12 @@
           typeof lastChatLen === 'number' &&
           len === 0 &&
           lastChatLen > 0 &&
-          favoriteMesIds.length
+          favoriteItems.length
         ) {
           lastChatKey = key || lastChatKey;
           lastChatRef = ref || lastChatRef;
           lastChatLen = len;
-          resetTempFavorites('len');
+          resetTempFavorites('len', { clearRange: true });
           return;
         }
 
@@ -2292,6 +4551,7 @@
     settings.rx = maxLeft > 0 ? clamp(clampedLeft / maxLeft, 0, 1) : 0;
     settings.ry = maxTop > 0 ? clamp(clampedTop / maxTop, 0, 1) : 0;
     saveSettings();
+    applyFavoritePanelPosition(root, { force: true });
   }
 
   function clampRootIntoViewport(root) {
@@ -2444,7 +4704,10 @@
     updateCollapseToggleButton(root);
 
     // 收起时关闭收藏面板/点选模式
-    if (settings.collapsed) closeFavPanel();
+    if (settings.collapsed) {
+      closeFavPanel();
+      closeFavoritesManager();
+    }
 
     // 用原 left/top 重新落位，仅在越界时做 clamp
     persistRootPosition(root, left, top);
@@ -2631,7 +4894,7 @@
 
   function bindButtons(root) {
     /** @type {NodeListOf<HTMLElement>} */
-    const btns = root.querySelectorAll('.stcj-btn');
+    const btns = root.querySelectorAll('.stcj-btn, .stcj-range-chip-main[data-action]');
 
     btns.forEach((btn) => {
       // 禁止长按/右键菜单
@@ -2698,8 +4961,7 @@
 
     // showRange 关联的额外元素（resetRange 按钮 + rangeChip 指示器）
     const RANGE_GROUP_EXTRA = [
-      '.stcj-btn[data-action="resetRange"]',
-      '.stcj-range-chip',
+      '.stcj-range-stack',
     ];
 
     // 1) 应用可见性
@@ -2803,6 +5065,27 @@
                 <span>50%</span><span>75%</span><span>100%</span><span>125%</span><span>150%</span>
               </div>
             </div>
+            <div class="stcj-settings-range-options">
+              <div class="stcj-settings-range-options-title">区间/跳转 设置</div>
+              <div class="stcj-settings-range-row-inline">
+                <div class="stcj-settings-range-cell">
+                  <label class="stcj-settings-range-label" for="stcj-range-context-input">跳转上下文</label>
+                  <input id="stcj-range-context-input" class="text_pole stcj-settings-range-input" type="number" min="1" step="1" value="${getRangeContext()}" title="输入楼层号跳转时，前后各加载多少层（默认 ${DEFAULT_RANGE_CONTEXT}）" />
+                </div>
+                <div class="stcj-settings-range-cell">
+                  <label class="stcj-settings-range-label" for="stcj-range-step-input">翻页步长</label>
+                  <input id="stcj-range-step-input" class="text_pole stcj-settings-range-input" type="number" min="1" step="1" value="${getRangeStep()}" title="区间激活后点击 ◀/▶ 每次平移的楼层数（默认 ${DEFAULT_RANGE_STEP}）" />
+                </div>
+                <div class="stcj-settings-range-cell stcj-settings-range-mode-cell">
+                  <label class="stcj-settings-range-label" for="stcj-range-mode-toggle">翻页模式</label>
+                  <button id="stcj-range-mode-toggle" class="stcj-range-mode-toggle ${getRangePagingMode() === 'shift' ? 'is-shift' : 'is-expand'}" type="button" title="左：扩展模式；右：平移模式" aria-label="区间翻页模式切换" aria-pressed="${getRangePagingMode() === 'shift' ? 'true' : 'false'}">
+                    <span class="stcj-range-mode-label stcj-range-mode-label-left">扩展</span>
+                    <span class="stcj-range-mode-label stcj-range-mode-label-right">平移</span>
+                    <span class="stcj-range-mode-thumb" aria-hidden="true"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
             <div class="stcj-settings-hint">
               <small>勾选以显示/隐藏按钮，拖拽 <i class="fa-solid fa-grip-vertical"></i> 调整按钮顺序。</small>
             </div>
@@ -2838,6 +5121,39 @@
     }
 
     syncScaleControls();
+
+    // 绑定区间翻页步长输入框
+    const rangeStepInput = document.getElementById('stcj-range-step-input');
+    if (rangeStepInput) {
+      rangeStepInput.addEventListener('change', (e) => {
+        const val = Math.max(1, Math.round(Number(e.target.value) || DEFAULT_RANGE_STEP));
+        e.target.value = val;
+        saveRangeStep(val);
+      });
+    }
+
+    // 绑定跳转上下文输入框
+    const rangeContextInput = document.getElementById('stcj-range-context-input');
+    if (rangeContextInput) {
+      rangeContextInput.addEventListener('change', (e) => {
+        const val = Math.max(1, Math.round(Number(e.target.value) || DEFAULT_RANGE_CONTEXT));
+        e.target.value = val;
+        saveRangeContext(val);
+      });
+    }
+
+    const rangeModeToggle = document.getElementById('stcj-range-mode-toggle');
+    if (rangeModeToggle) {
+      rangeModeToggle.addEventListener('click', () => {
+        const current = getRangePagingMode();
+        const next = current === 'shift' ? 'expand' : 'shift';
+        saveRangePagingMode(next);
+        rangeModeToggle.classList.toggle('is-shift', next === 'shift');
+        rangeModeToggle.classList.toggle('is-expand', next !== 'shift');
+        rangeModeToggle.setAttribute('aria-pressed', next === 'shift' ? 'true' : 'false');
+        rangeModeToggle.title = next === 'shift' ? '当前：平移模式（右）' : '当前：扩展模式（左）';
+      });
+    }
 
     log('设置面板已挂载到 #extensions_settings2');
   }
@@ -2976,12 +5292,17 @@
       <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">${ICONS.num(1)}</div>
       <div class="stcj-btn" data-action="quickPage" title="快速翻页(右)：点击最新楼层的右翻页按钮">${ICONS.fastForward}</div>
       <div class="stcj-btn" data-action="quickPageLeft" title="快速翻页(左)：点击最新楼层的左翻页按钮">${ICONS.fastBackward}</div>
-      <div class="stcj-btn" data-action="showRange" title="显示楼层区间">${ICONS.range}</div>
-      <div class="stcj-btn stcj-hidden" data-action="resetRange" title="恢复默认聊天视图">${ICONS.restore}</div>
-      <div class="stcj-range-chip" aria-live="polite" aria-hidden="true">
-        <span class="stcj-range-chip-label">区间</span>
-        <span class="stcj-range-chip-value">-</span>
-        <div class="stcj-btn stcj-mini stcj-range-edit" data-action="editRange" title="修改当前区间">改</div>
+      <div class="stcj-btn" data-action="showRange" title="跳转/区间显示（输入楼层号或区间）">${ICONS.range}</div>
+      <div class="stcj-range-stack stcj-hidden" aria-hidden="true">
+        <div class="stcj-range-chip" aria-live="polite" aria-hidden="true">
+          <div class="stcj-btn stcj-mini stcj-range-nav" data-action="rangePrev" title="向前扩展区间">${ICONS.chevronLeft}</div>
+          <div class="stcj-range-chip-main" data-action="editRange" title="修改当前区间">
+            <span class="stcj-range-chip-label">区间</span>
+            <span class="stcj-range-chip-value">-</span>
+          </div>
+          <div class="stcj-btn stcj-mini stcj-range-nav" data-action="rangeNext" title="向后扩展区间">${ICONS.chevronRight}</div>
+        </div>
+        <div class="stcj-btn stcj-hidden stcj-range-reset-text" data-action="resetRange" title="恢复默认聊天视图">恢复</div>
       </div>
       <div class="stcj-btn stcj-toggle" data-action="toggleOrientation"></div>
       <div class="stcj-btn" data-action="prev" title="上一楼（跳到头部）"></div>
@@ -2992,12 +5313,13 @@
 
       <div class="stcj-pin-group">
         <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${ICONS.pin}</div>
+        <div class="stcj-btn stcj-favorites-manager" data-action="openFavoritesManager" title="打开收藏管理器">${ICONS.folder}</div>
         <div class="stcj-btn stcj-pin-arrow" data-action="toggleFavPanel"></div>
       </div>
 
       <div class="stcj-fav-panel" aria-hidden="true">
         <div class="stcj-fav-header">
-          <div class="stcj-fav-title">${ICONS.pin} 收藏</div>
+          <div class="stcj-fav-title">${ICONS.pin} 最近收藏</div>
           <div class="stcj-fav-close" title="关闭">${ICONS.close}</div>
         </div>
         <div class="stcj-fav-hint"></div>
@@ -3016,6 +5338,7 @@
     updateCollapseToggleButton(root);
     updatePrevNextButtons(root);
     updateFavPanelToggleButton(root);
+    refreshFavoritesFromMetadata();
     updateFavoritesUI(root);
     updateRangeButtons(root);
     updateQuickEditButton(root);
@@ -3026,9 +5349,10 @@
     attachDrag(root);
     bindButtons(root);
     bindFavoritesPanel(root);
+    attachFavoritePanelDrag(root);
     detachOutsideClose = bindRootOutsideClose(root);
 
-    // 监听聊天切换，确保“临时收藏”不跨聊天文件
+    // 监听聊天切换，切换到对应聊天文件的永久收藏
     detachChatListeners = attachChatChangeListeners();
     startChatWatch();
 
@@ -3098,6 +5422,36 @@
       }
 
       try {
+        if (favoritesSaveTimer) {
+          clearTimeout(favoritesSaveTimer);
+          favoritesSaveTimer = null;
+        }
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        ensureFavoritesPreviewMessageListener.detach?.();
+        favoritesPreviewMessageListenerAttached = false;
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        ensureFavoritesModalResizeListener.detach?.();
+        ensureFavoritesModalResizeListener.bound = false;
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        closeFavoritesManager();
+        document.getElementById(FAVORITES_MODAL_ID)?.remove();
+      } catch {
+        /* ignore */
+      }
+
+      try {
         root.remove();
       } catch {
         /* ignore */
@@ -3109,6 +5463,7 @@
 
     // 恢复全局隐藏状态
     globalHidden = loadGlobalHidden();
+    favoritesPreviewMode = loadFavoritesPreviewMode();
     root.classList.toggle('stcj-global-hidden', globalHidden);
 
     // 挂载扩展设置面板
