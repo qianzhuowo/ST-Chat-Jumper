@@ -5373,6 +5373,13 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     // 恢复CSS过渡
     root.style.transition = '';
 
+    // 延迟修正：布局稳定后重新定位，消除初始化时瞬时尺寸导致的偏差
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        applyRootPositionFromSettings(root);
+      });
+    });
+
     attachDrag(root);
     bindButtons(root);
     bindFavoritesPanel(root);
