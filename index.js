@@ -4548,6 +4548,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     settings.x = Math.round(clampedLeft);
     settings.y = Math.round(clampedTop);
+    // maxLeft/maxTop 为 0（悬浮窗尺寸 >= 视口）时保留原有 rx/ry，避免被错误清零
     if (maxLeft > 0) {
       settings.rx = clamp(clampedLeft / maxLeft, 0, 1);
     }
@@ -4555,6 +4556,19 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       settings.ry = clamp(clampedTop / maxTop, 0, 1);
     }
     saveSettings();
+    applyFavoritePanelPosition(root, { force: true });
+  }
+
+  // 仅设置 DOM 位置（不反算 rx/ry、不触发保存），用于「恢复已保存位置」场景
+  function setRootPositionOnly(root, left, top) {
+    const { maxLeft, maxTop } = getRootMaxOffsets(root);
+    const clampedLeft = clamp(left, 0, maxLeft);
+    const clampedTop = clamp(top, 0, maxTop);
+
+    root.style.left = `${clampedLeft}px`;
+    root.style.top = `${clampedTop}px`;
+    settings.x = Math.round(clampedLeft);
+    settings.y = Math.round(clampedTop);
     applyFavoritePanelPosition(root, { force: true });
   }
 
@@ -4567,15 +4581,9 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   function applyRootPositionFromSettings(root) {
     const { maxLeft, maxTop } = getRootMaxOffsets(root);
 
-    // 优先使用相对位置（rx/ry）：直接设置DOM位置，不触发保存
+    // 优先使用相对位置（rx/ry）：直接设置 DOM 位置，不反算不保存，保持 rx/ry 权威值
     if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
-      const left = clamp(settings.rx * maxLeft, 0, maxLeft);
-      const top = clamp(settings.ry * maxTop, 0, maxTop);
-      root.style.left = `${left}px`;
-      root.style.top = `${top}px`;
-      settings.x = Math.round(left);
-      settings.y = Math.round(top);
-      applyFavoritePanelPosition(root, { force: true });
+      setRootPositionOnly(root, settings.rx * maxLeft, settings.ry * maxTop);
       return;
     }
 
@@ -4603,16 +4611,10 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = null;
 
-        // 有相对位置时：直接设置DOM位置，不触发保存
+        // 有相对位置时：直接设置 DOM 位置，不触发保存
         if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
           const { maxLeft, maxTop } = getRootMaxOffsets(root);
-          const left = clamp(settings.rx * maxLeft, 0, maxLeft);
-          const top = clamp(settings.ry * maxTop, 0, maxTop);
-          root.style.left = `${left}px`;
-          root.style.top = `${top}px`;
-          settings.x = Math.round(left);
-          settings.y = Math.round(top);
-          applyFavoritePanelPosition(root, { force: true });
+          setRootPositionOnly(root, settings.rx * maxLeft, settings.ry * maxTop);
           return;
         }
 
@@ -4623,12 +4625,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       // 极少数环境不支持 rAF：直接处理
       if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
         const { maxLeft, maxTop } = getRootMaxOffsets(root);
-        const left = clamp(settings.rx * maxLeft, 0, maxLeft);
-        const top = clamp(settings.ry * maxTop, 0, maxTop);
-        root.style.left = `${left}px`;
-        root.style.top = `${top}px`;
-        settings.x = Math.round(left);
-        settings.y = Math.round(top);
+        setRootPositionOnly(root, settings.rx * maxLeft, settings.ry * maxTop);
         return;
       }
       clampRootIntoViewport(root);
@@ -5350,9 +5347,6 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     document.body.appendChild(root);
 
-    // 暂时禁用CSS过渡，确保初始位置计算不受过渡动画影响
-    root.style.transition = 'none';
-
     // 初始布局
     root.style.setProperty('--stcj-scale', String(normalizeRootScale(settings.scale)));
     root.classList.toggle('stcj-horizontal', settings.orientation === 'horizontal');
@@ -5367,13 +5361,14 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     updateRangeButtons(root);
     updateQuickEditButton(root);
 
-    // 初始位置
+    // 初始位置：临时禁用 CSS 过渡，避免 scale 过渡动画影响尺寸计算
+    const prevTransition = root.style.transition;
+    root.style.transition = 'none';
     applyRootPositionFromSettings(root);
+    // 恢复 CSS 过渡
+    root.style.transition = prevTransition;
 
-    // 恢复CSS过渡
-    root.style.transition = '';
-
-    // 延迟修正：布局稳定后重新定位，消除初始化时瞬时尺寸导致的偏差
+    // 延迟修正：布局完全稳定后重新定位，消除初始化时瞬时尺寸导致的偏差
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         applyRootPositionFromSettings(root);
