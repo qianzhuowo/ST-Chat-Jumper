@@ -4548,8 +4548,12 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     settings.x = Math.round(clampedLeft);
     settings.y = Math.round(clampedTop);
-    settings.rx = maxLeft > 0 ? clamp(clampedLeft / maxLeft, 0, 1) : 0;
-    settings.ry = maxTop > 0 ? clamp(clampedTop / maxTop, 0, 1) : 0;
+    if (maxLeft > 0) {
+      settings.rx = clamp(clampedLeft / maxLeft, 0, 1);
+    }
+    if (maxTop > 0) {
+      settings.ry = clamp(clampedTop / maxTop, 0, 1);
+    }
     saveSettings();
     applyFavoritePanelPosition(root, { force: true });
   }
@@ -4563,9 +4567,15 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   function applyRootPositionFromSettings(root) {
     const { maxLeft, maxTop } = getRootMaxOffsets(root);
 
-    // 优先使用相对位置（rx/ry）
+    // 优先使用相对位置（rx/ry）：直接设置DOM位置，不触发保存
     if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
-      persistRootPosition(root, settings.rx * maxLeft, settings.ry * maxTop);
+      const left = clamp(settings.rx * maxLeft, 0, maxLeft);
+      const top = clamp(settings.ry * maxTop, 0, maxTop);
+      root.style.left = `${left}px`;
+      root.style.top = `${top}px`;
+      settings.x = Math.round(left);
+      settings.y = Math.round(top);
+      applyFavoritePanelPosition(root, { force: true });
       return;
     }
 
@@ -4593,21 +4603,32 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = null;
 
-        // 有相对位置时：按相对位置重新计算，保证窗口变化后仍保持相对位置
+        // 有相对位置时：直接设置DOM位置，不触发保存
         if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
           const { maxLeft, maxTop } = getRootMaxOffsets(root);
-          persistRootPosition(root, settings.rx * maxLeft, settings.ry * maxTop);
+          const left = clamp(settings.rx * maxLeft, 0, maxLeft);
+          const top = clamp(settings.ry * maxTop, 0, maxTop);
+          root.style.left = `${left}px`;
+          root.style.top = `${top}px`;
+          settings.x = Math.round(left);
+          settings.y = Math.round(top);
+          applyFavoritePanelPosition(root, { force: true });
           return;
         }
 
-        // 兜底：仅做 clamp
+        // 兜底：仅做 clamp（旧版像素坐标，需转换保存）
         clampRootIntoViewport(root);
       });
     } catch {
       // 极少数环境不支持 rAF：直接处理
       if (typeof settings.rx === 'number' && typeof settings.ry === 'number') {
         const { maxLeft, maxTop } = getRootMaxOffsets(root);
-        persistRootPosition(root, settings.rx * maxLeft, settings.ry * maxTop);
+        const left = clamp(settings.rx * maxLeft, 0, maxLeft);
+        const top = clamp(settings.ry * maxTop, 0, maxTop);
+        root.style.left = `${left}px`;
+        root.style.top = `${top}px`;
+        settings.x = Math.round(left);
+        settings.y = Math.round(top);
         return;
       }
       clampRootIntoViewport(root);
@@ -5329,6 +5350,9 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     document.body.appendChild(root);
 
+    // 暂时禁用CSS过渡，确保初始位置计算不受过渡动画影响
+    root.style.transition = 'none';
+
     // 初始布局
     root.style.setProperty('--stcj-scale', String(normalizeRootScale(settings.scale)));
     root.classList.toggle('stcj-horizontal', settings.orientation === 'horizontal');
@@ -5345,6 +5369,16 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     // 初始位置
     applyRootPositionFromSettings(root);
+
+    // 恢复CSS过渡
+    root.style.transition = '';
+
+    // 延迟修正：布局稳定后重新定位，消除初始化时瞬时尺寸导致的偏差
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        applyRootPositionFromSettings(root);
+      });
+    });
 
     attachDrag(root);
     bindButtons(root);
