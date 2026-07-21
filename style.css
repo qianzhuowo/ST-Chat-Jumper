@@ -3,7 +3,7 @@
 #stcj-root.stcj-root {
   --stcj-scale: 1;
   position: fixed;
-  z-index: 999999;
+  z-index: 10000;
   display: flex;
   align-items: center;
   gap: 1px;
@@ -1190,7 +1190,7 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
 
 #stcj-fav-quick-menu-overlay {
   position: fixed;
-  z-index: 1000001;
+  z-index: 10002;
   min-width: 132px;
   padding: 6px;
   display: flex;
@@ -1276,7 +1276,7 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
 #stcj-favorites-modal.stcj-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000000;
+  z-index: 10001;
   display: none;
   align-items: center;
   justify-content: center;
