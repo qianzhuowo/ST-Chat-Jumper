@@ -53,7 +53,15 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     favPanelRx: null,
     favPanelRy: null,
     favPanelCustom: false,
+    favPanelW: null,
+    favPanelH: null,
   };
+
+  // 收藏面板自定义尺寸的限制（px）
+  const FAV_PANEL_MIN_W = 160;
+  const FAV_PANEL_MIN_H = 120;
+  const FAV_PANEL_MAX_W = 640;
+  const FAV_PANEL_MAX_H = 720;
 
   // ===== 按钮可见性与排序设置（持久化到 extensionSettings） =====
   const EXT_SETTINGS_KEY = 'ST-Chat-Jumper';
@@ -464,6 +472,10 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       const favPanelRx = typeof parsed.favPanelRx === 'number' && Number.isFinite(parsed.favPanelRx) ? clamp(parsed.favPanelRx, 0, 1) : null;
       const favPanelRy = typeof parsed.favPanelRy === 'number' && Number.isFinite(parsed.favPanelRy) ? clamp(parsed.favPanelRy, 0, 1) : null;
       const favPanelCustom = typeof parsed.favPanelCustom === 'boolean' ? parsed.favPanelCustom : DEFAULT_SETTINGS.favPanelCustom;
+      const favPanelW = typeof parsed.favPanelW === 'number' && Number.isFinite(parsed.favPanelW)
+        ? clamp(parsed.favPanelW, FAV_PANEL_MIN_W, FAV_PANEL_MAX_W) : null;
+      const favPanelH = typeof parsed.favPanelH === 'number' && Number.isFinite(parsed.favPanelH)
+        ? clamp(parsed.favPanelH, FAV_PANEL_MIN_H, FAV_PANEL_MAX_H) : null;
 
       return {
         ...DEFAULT_SETTINGS,
@@ -480,6 +492,8 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
         favPanelRx,
         favPanelRy,
         favPanelCustom,
+        favPanelW,
+        favPanelH,
       };
     } catch {
       return { ...DEFAULT_SETTINGS };
@@ -3676,6 +3690,16 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return root?.querySelector?.('.stcj-fav-panel') || null;
   }
 
+  function getRootViewportScale(root) {
+    if (!root) return 1;
+    const rect = root.getBoundingClientRect?.();
+    const width = root.offsetWidth || 0;
+    if (rect?.width && width > 0) {
+      return Math.max(0.01, rect.width / width);
+    }
+    return normalizeRootScale(settings.scale);
+  }
+
   function getFavoritePanelViewportMetrics(panel) {
     const rect = panel?.getBoundingClientRect?.();
     const width = Math.max(0, rect?.width || panel?.offsetWidth || 0);
@@ -3690,6 +3714,19 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     };
   }
 
+  function getFavoritePanelCssSizeLimits(root) {
+    const scale = getRootViewportScale(root);
+    const maxWByViewport = Math.max(FAV_PANEL_MIN_W, (window.innerWidth - 16) / scale);
+    const maxHByViewport = Math.max(FAV_PANEL_MIN_H, (window.innerHeight - 16) / scale);
+    return {
+      minW: FAV_PANEL_MIN_W,
+      minH: FAV_PANEL_MIN_H,
+      maxW: Math.min(FAV_PANEL_MAX_W, maxWByViewport),
+      maxH: Math.min(FAV_PANEL_MAX_H, maxHByViewport),
+      scale,
+    };
+  }
+
   function applyFavoritePanelViewportPosition(root, panel, viewportLeft, viewportTop, persist = false) {
     if (!root || !panel) return;
     const { width, height, margin, maxLeft, maxTop } = getFavoritePanelViewportMetrics(panel);
@@ -3699,12 +3736,16 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     const clampedLeft = clamp(Number(viewportLeft) || 0, margin, margin + maxLeft);
     const clampedTop = clamp(Number(viewportTop) || 0, margin, margin + maxTop);
     const rootRect = root.getBoundingClientRect();
+    const rootScale = getRootViewportScale(root);
 
     panel.dataset.positionMode = 'custom';
     root.dataset.favPanelDefaultSide = 'custom';
-    panel.style.width = `${lockedWidth}px`;
-    panel.style.left = `${Math.round(clampedLeft - rootRect.left)}px`;
-    panel.style.top = `${Math.round(clampedTop - rootRect.top)}px`;
+    // 自定义尺寸模式下宽度由用户控制，不回写锁定宽度
+    if (panel.dataset.sizeMode !== 'custom') {
+      panel.style.width = `${Math.round(lockedWidth / rootScale)}px`;
+    }
+    panel.style.left = `${Math.round((clampedLeft - rootRect.left) / rootScale)}px`;
+    panel.style.top = `${Math.round((clampedTop - rootRect.top) / rootScale)}px`;
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
 
@@ -3721,7 +3762,11 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   function applyFavoritePanelDefaultPosition(root, panel) {
     if (!root || !panel) return;
     panel.removeAttribute('data-position-mode');
-    panel.style.width = '';
+    // 自定义尺寸模式下保留用户设置的宽高，不清除
+    if (panel.dataset.sizeMode !== 'custom') {
+      panel.style.width = '';
+      panel.style.height = '';
+    }
     panel.style.left = '';
     panel.style.top = '';
     panel.style.right = '';
@@ -3746,6 +3791,9 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     const panel = getFavoritePanelElement(root);
     if (!root || !panel) return;
     if (!favPanelOpen && !opts.force) return;
+
+    // 先恢复自定义尺寸（若有），再计算位置
+    applyFavoritePanelSize(root, panel);
 
     if (settings.favPanelCustom) {
       const { margin, maxLeft, maxTop } = getFavoritePanelViewportMetrics(panel);
@@ -3826,6 +3874,105 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   function persistFavoritePanelPosition(root, panel, viewportLeft, viewportTop) {
     applyFavoritePanelViewportPosition(root, panel, viewportLeft, viewportTop, true);
   }
+  // 将已保存的自定义尺寸应用到面板 DOM（不保存）
+  function applyFavoritePanelSize(root, panel = getFavoritePanelElement(root)) {
+    if (!panel) return;
+    const hasW = typeof settings.favPanelW === 'number' && Number.isFinite(settings.favPanelW);
+    const hasH = typeof settings.favPanelH === 'number' && Number.isFinite(settings.favPanelH);
+
+    if (!hasW && !hasH) {
+      panel.removeAttribute('data-size-mode');
+      panel.style.width = '';
+      panel.style.height = '';
+      return;
+    }
+
+    panel.dataset.sizeMode = 'custom';
+    const { maxW, maxH } = getFavoritePanelCssSizeLimits(root);
+    if (hasW) {
+      panel.style.width = `${clamp(settings.favPanelW, FAV_PANEL_MIN_W, maxW)}px`;
+    }
+    if (hasH) {
+      panel.style.height = `${clamp(settings.favPanelH, FAV_PANEL_MIN_H, maxH)}px`;
+    }
+  }
+
+  function attachFavoritePanelResize(root) {
+    const panel = getFavoritePanelElement(root);
+    const handle = panel?.querySelector?.('.stcj-fav-resize');
+    if (!panel || !handle) return;
+
+    let resizeState = null;
+
+    const finishResize = (persist) => {
+      if (!resizeState) return;
+      try { handle.releasePointerCapture?.(resizeState.pointerId); } catch { /* ignore */ }
+      panel.classList.remove('stcj-fav-panel-resizing');
+      if (persist && resizeState.moved) {
+        // 只保存尺寸，不动位置（不重算/不回写 rx/ry）——
+        // 右下角缩放时左上角本来就未变，CSS left/top 也未变，无需重定位
+        settings.favPanelW = Math.round(parseFloat(panel.style.width) || resizeState.startW);
+        settings.favPanelH = Math.round(parseFloat(panel.style.height) || resizeState.startH);
+        saveSettings();
+      }
+      resizeState = null;
+    };
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (!favPanelOpen) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+      const rect = panel.getBoundingClientRect();
+      const rootScale = getRootViewportScale(root);
+      const startW = rect.width / rootScale;
+      const startH = rect.height / rootScale;
+      resizeState = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startW,
+        startH,
+        startLeft: rect.left,
+        startTop: rect.top,
+        rootScale,
+        moved: false,
+      };
+      // 进入自定义尺寸模式，锁定当前 CSS 尺寸作为起点
+      panel.dataset.sizeMode = 'custom';
+      panel.style.width = `${Math.round(startW)}px`;
+      panel.style.height = `${Math.round(startH)}px`;
+      panel.classList.add('stcj-fav-panel-resizing');
+      try { handle.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (!resizeState || resizeState.pointerId !== e.pointerId) return;
+      const dx = e.clientX - resizeState.startX;
+      const dy = e.clientY - resizeState.startY;
+      if (!resizeState.moved && Math.hypot(dx, dy) < 3) return;
+      resizeState.moved = true;
+
+      const { maxW, maxH } = getFavoritePanelCssSizeLimits(root);
+      const scale = resizeState.rootScale || getRootViewportScale(root);
+      const w = clamp(resizeState.startW + dx / scale, FAV_PANEL_MIN_W, maxW);
+      const h = clamp(resizeState.startH + dy / scale, FAV_PANEL_MIN_H, maxH);
+      panel.style.width = `${Math.round(w)}px`;
+      panel.style.height = `${Math.round(h)}px`;
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointerup', (e) => {
+      if (!resizeState || resizeState.pointerId !== e.pointerId) return;
+      finishResize(true);
+      e.stopPropagation();
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointercancel', () => finishResize(false));
+  }
+
 
   function ensureFavoritesModalRoot() {
     let modal = document.getElementById(FAVORITES_MODAL_ID);
@@ -5342,6 +5489,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
         </div>
         <div class="stcj-fav-hint"></div>
         <div class="stcj-fav-list"></div>
+        <div class="stcj-fav-resize" title="拖动调整大小" aria-hidden="true"></div>
       </div>
     `;
 
@@ -5379,6 +5527,8 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     bindButtons(root);
     bindFavoritesPanel(root);
     attachFavoritePanelDrag(root);
+    attachFavoritePanelResize(root);
+    applyFavoritePanelSize(root);
     detachOutsideClose = bindRootOutsideClose(root);
 
     // 监听聊天切换，切换到对应聊天文件的永久收藏

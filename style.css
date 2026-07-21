@@ -449,6 +449,36 @@
   transform-origin: top left;
 }
 
+/* 自定义尺寸时，放开默认宽高上限，改由 JS 控制 */
+#stcj-root .stcj-fav-panel[data-size-mode="custom"] {
+  max-width: none;
+  max-height: none;
+}
+
+/* 右下角缩放手柄 */
+#stcj-root .stcj-fav-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+  opacity: 0.55;
+  background:
+    linear-gradient(135deg, transparent 0 50%, rgba(255, 255, 255, 0.6) 50% 60%, transparent 60% 70%, rgba(255, 255, 255, 0.6) 70% 80%, transparent 80% 90%, rgba(255, 255, 255, 0.6) 90% 100%);
+  border-bottom-right-radius: 12px;
+}
+
+#stcj-root .stcj-fav-resize:hover {
+  opacity: 0.9;
+}
+
+#stcj-root .stcj-fav-panel.stcj-fav-panel-resizing {
+  user-select: none;
+}
+
 #stcj-root.stcj-fav-open .stcj-fav-panel {
   display: flex;
   animation: stcjFadeIn 0.2s ease-out;
@@ -1080,6 +1110,18 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* custom size mode: panel no longer self-scrolls, inner list scrolls, handle stays at bottom */
+#stcj-root .stcj-fav-panel[data-size-mode="custom"] {
+  overflow: hidden;
+}
+
+#stcj-root .stcj-fav-panel[data-size-mode="custom"] .stcj-fav-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #stcj-root .stcj-fav-item {

@@ -66,6 +66,9 @@ SillyTavern/public/scripts/extensions/third-party/
 
 ## 版本历史
 
+### v2.0.2
+- **改进**: 「最近收藏」悬浮窗支持自由调节窗口大小
+
 ### v2.0.1
 - **优化**: 在协助者mrl的帮助下修复了悬浮窗拖动后位置无法保存的 bug
 
