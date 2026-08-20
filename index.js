@@ -11,7 +11,8 @@
  * - 快速左/右翻页
  */
 
-import { messageFormatting as coreMessageFormatting } from '../../../../script.js';
+import { messageFormatting as coreMessageFormatting, messageEdit } from '../../../../script.js';
+import { SWIPE_DIRECTION } from '../../../constants.js';
 
 (function () {
   'use strict';
@@ -21,7 +22,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   const STORAGE_KEY = 'st_chat_jumper_settings_v1';
   const BODY_PIN_MODE_CLASS = 'stcj-pin-mode';
 
-  /** @type {'horizontal'|'vertical'} */
+  /** @txpe {'horizontal'|'vertical'} */
   const DEFAULT_ORIENTATION = 'vertical';
   const DEFAULT_SCALE = 1;
   const MIN_SCALE = 0.5;
@@ -33,7 +34,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   const DEFAULT_RANGE_PAGING_MODE = 'expand';
 
   /**
-   * x/y: 兼容旧版本的像素坐标（仍会写入，方便调试）
+   * x/x: 兼容旧版本的像素坐标（仍会写入，方便调试）
    * rx/ry: 相对位置（0~1），用于窗口尺寸变化时保持相对位置
    * collapsed: 是否收起按钮栏（仅保留悬浮条主体+收起按钮）
    * scale: 悬浮条缩放倍数
@@ -86,7 +87,8 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     { id: 'currentHead',       label: '对齐到头部 (H)',     defaultEnabled: true, order: 10 },
     { id: 'currentTail',       label: '对齐到尾部 (L)',     defaultEnabled: true, order: 11 },
     { id: 'quickEdit',         label: '快速编辑 (✏️)',      defaultEnabled: true, order: 12 },
-    { id: 'pinGroup',          label: '收藏 (📌)',          defaultEnabled: true, order: 13 },
+    { id: 'quickDelete',       label: '快速删除 (🗑️)',      defaultEnabled: true, order: 13 },
+    { id: 'pinGroup',          label: '收藏 (📌)',          defaultEnabled: true, order: 14 },
   ];
 
   /**
@@ -333,6 +335,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   let globalHidden = false;
   let favoriteQuickMenuId = null;
   let favoritesSaveTimer = null;
+  const pendingFavoriteSnapshots = new Map();
   let favoritesModalOpen = false;
   let favoritesModalSort = 'floor_asc';
   let favoritesModalActiveId = null;
@@ -345,7 +348,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   let favoriteSyncSeq = 0;
 
   // ===== 快速编辑（铅笔） =====
-  /** @type {null|{mesId:number, scrollTop:number|null, scrollEl:HTMLElement|null, selectionCtx:null|{selectedText:string,before:string,after:string,displayText:string,start:number,end:number}, detachOutside: null|(() => void), monitorTimer:number|null}} */
+  /** @type {null|{mesId:number, scrollTop:number|null, scrollEl:HTMLElement|null, selectionCtx:null|{selectedText:string,before:string,after:string,displayText:string,start:number,end:number}, detachOutside:null|(() => void), detachMonitor:null|(() => void), chatId:string|null}} */
   let quickEditState = null;
   /** @type {null|HTMLElement} */
   let quickEditMirror = null;
@@ -360,10 +363,20 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   /** @type {null|(() => void)} */
   let detachOutsideClose = null;
   let chatWatchInterval = null;
+  let hostFlashSuppressTimer = null;
+  let settingsMountObserver = null;
   let lastChatKey = null;
   let lastChatRef = null;
+  let lastChatMetadataRef = null;
+  /** @type {IntersectionObserver|null} */
+  let messageVisibilityObserver = null;
+  /** @type {MutationObserver|null} */
+  let messageDomObserver = null;
+  const visibleMessageIds = new Set();
   /** @type {null|{start:number,end:number}} */
   let activeRange = null;
+  let rangeBusy = false;
+  let rangeOperationSeq = 0;
 
   let lastChatLen = null;
 
@@ -560,40 +573,142 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function getChatContainer() {
-    return document.getElementById('chat');
+  const hostStyleWrites = new Map();
+  let currentChatIndex = null;
+  let currentChatIndexKey = null;
+
+  function getHostContext() {
+    try { return window.SillyTavern?.getContext?.() || null; } catch { return null; }
+  }
+
+  function getHostEventTypes(ctx = getHostContext()) {
+    return { ...(ctx?.event_types || {}), ...(ctx?.eventTypes || {}) };
+  }
+
+  function getCurrentChatId(ctx = getHostContext()) {
+    try {
+      const id = ctx?.getCurrentChatId?.() ?? ctx?.chatId ?? ctx?.chat_id ?? ctx?.activeChatId ?? ctx?.active_chat_id;
+      return id == null ? null : String(id);
+    } catch { return null; }
+  }
+
+  function getChatContainer() { return document.getElementById('chat'); }
+
+  function isScrollableElement(el, requireOverflowContent = true) {
+    if (!el) return false;
+    try {
+      const style = getComputedStyle(el);
+      const canScroll = /(auto|scroll|overlay)/.test(style.overflowY);
+      return canScroll && (!requireOverflowContent || el.scrollHeight > el.clientHeight + 1);
+    } catch { return false; }
+  }
+
+  function writeHostStyle(el, property, value) {
+    if (!el?.style) return;
+    let properties = hostStyleWrites.get(el);
+    if (!properties) hostStyleWrites.set(el, properties = new Map());
+    if (!properties.has(property)) properties.set(property, el.style.getPropertyValue(property));
+    el.style.setProperty(property, value);
+  }
+
+  function restoreHostStyles() {
+    hostStyleWrites.forEach((properties, el) => properties.forEach((value, property) => value ? el.style.setProperty(property, value) : el.style.removeProperty(property)));
+    hostStyleWrites.clear();
   }
 
   function getChatScrollElement() {
     const chat = getChatContainer();
     if (!chat) return null;
 
-    // SillyTavern 通常使用 SimpleBar：真正可滚动的视口是 #chat 的祖先 .simplebar-content-wrapper
-    // 之前用 chat.querySelector 会找不到（因为 wrapper 通常在 #chat 外层），导致滚动/定位基准不稳定。
-    const wrapper = chat.closest('.simplebar-content-wrapper');
-    if (wrapper) {
-      // 防止“滚动链”把滚动/定位传递给页面本身（某些浏览器/触控板下会导致整个页面上移露出灰底）
-      try {
-        wrapper.style.overscrollBehavior = 'contain';
-      } catch {
-        /* ignore */
+    // 优先选择当前确实具有滚动范围的 #chat；主题若把滚动移到祖先，则选择具有实际滚动范围的祖先。
+    let scrollEl = isScrollableElement(chat, true) ? chat : null;
+    if (!scrollEl) {
+      for (let node = chat.parentElement; node && node !== document.body; node = node.parentElement) {
+        if (isScrollableElement(node, true)) { scrollEl = node; break; }
       }
-      return wrapper;
     }
-
-    // 极少数布局可能把 wrapper 放在 #chat 内部，做一层兜底
-    const inner = chat.querySelector?.('.simplebar-content-wrapper');
-    if (inner) {
-      try {
-        inner.style.overscrollBehavior = 'contain';
-      } catch {
-        /* ignore */
-      }
-      return inner;
-    }
-
-    return chat;
+    // 空聊天/短聊天没有滚动范围时，标准 ST 仍以 #chat 作为后续滚动容器。
+    scrollEl ||= isScrollableElement(chat, false) ? chat : null;
+    scrollEl ||= chat;
+    writeHostStyle(scrollEl, 'overscroll-behavior', 'contain');
+    return scrollEl;
   }
+
+  function getMessageElement(mesId) { return getChatContainer()?.querySelector?.(`.mes[mesid="${mesId}"]`) || null; }
+
+  function waitForDom({ root = getChatContainer(), find, timeoutMs = 2000, events = [] }) {
+    const found = find?.();
+    if (found) return Promise.resolve(found);
+    return new Promise((resolve) => {
+      let settled = false, observer = null, timer = null;
+      const ctx = getHostContext();
+      const finish = (value) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); observer?.disconnect();
+        events.forEach((event) => ctx?.eventSource?.removeListener?.(event, check));
+        resolve(value || null);
+      };
+      const check = () => { const value = find?.(); if (value) finish(value); };
+      if (root && window.MutationObserver) { observer = new MutationObserver(check); observer.observe(root, { childList: true, subtree: true }); }
+      events.filter(Boolean).forEach((event) => ctx?.eventSource?.on?.(event, check));
+      timer = setTimeout(() => finish(find?.()), timeoutMs);
+    });
+  }
+
+  async function swipeLatest(direction) {
+    const ctx = getHostContext();
+    if (typeof ctx?.swipe?.to !== 'function') return false;
+    // swipe.to 暴露的是 swipe(event, direction, options)；快速按钮没有可准确声明的宿主来源。
+    await ctx.swipe.to(null, direction, {});
+    return true;
+  }
+
+  async function openEditor(mesId) {
+    try { await messageEdit(mesId); return true; }
+    catch (e) { log('messageEdit 失败', e); return false; }
+  }
+
+  function commitEditor(mesEl) {
+    const done = mesEl?.querySelector?.(QUICK_EDIT.DONE_BUTTON_SELECTOR);
+    if (done && typeof done.click === 'function') {
+      done.click();
+      return true;
+    }
+    return false;
+  }
+
+  function suppressHostJumpFlash(duration = 2200) {
+    const chat = getChatContainer();
+    if (!chat) return;
+    chat.classList.add('stcj-suppress-host-flash');
+    if (hostFlashSuppressTimer) clearTimeout(hostFlashSuppressTimer);
+    hostFlashSuppressTimer = setTimeout(() => {
+      chat.classList.remove('stcj-suppress-host-flash');
+      chat.querySelectorAll('.mes.flash.animated').forEach((el) => {
+        el.classList.remove('flash', 'animated');
+        el.style.removeProperty('--animation-duration');
+      });
+      hostFlashSuppressTimer = null;
+    }, duration);
+  }
+
+  async function executeChatJump(mesId) {
+    const ctx = getHostContext();
+    suppressHostJumpFlash();
+    try {
+      if (typeof ctx?.executeSlashCommandsWithOptions === 'function') {
+        await ctx.executeSlashCommandsWithOptions(`/chat-jump ${mesId}`, { handleParserErrors: false });
+        return true;
+      }
+    } catch (e) { log('公开 chat-jump 执行失败，尝试兼容回退', e); }
+    try {
+      const cmd = ctx?.SlashCommandParser?.commands?.['chat-jump'] || window.SillyTavern?.SlashCommandParser?.commands?.['chat-jump'];
+      if (cmd?.callback) { await cmd.callback({}, String(mesId)); return true; }
+    } catch (e) { log('内部 chat-jump callback 失败', e); }
+    return false;
+  }
+
+  function invalidateChatIndex() { currentChatIndex = null; currentChatIndexKey = null; }
 
   function captureWindowScroll() {
     try {
@@ -732,41 +847,22 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   async function quickFlipLatestMessagePage(direction = 'right') {
     const isLeft = direction === 'left';
-    const selectorBase = isLeft ? '.swipe_left' : '.swipe_right';
     const directionText = isLeft ? '左' : '右';
     const pageDirectionText = isLeft ? '上一' : '下一';
     const lastId = getLastMessageId();
-    if (!Number.isFinite(lastId) || lastId < 0) {
-      toastWarn('未找到最新楼层。');
-      return false;
-    }
-
-    let mesEl = getLatestMessageElement();
-    const mesId = mesEl ? parseInt(mesEl.getAttribute('mesid') || '', 10) : NaN;
-
-    if (!mesEl || Number.isNaN(mesId) || mesId !== lastId) {
-      const winPos = captureWindowScroll();
-      await trySlashChatJump(lastId);
-      restoreWindowScrollStable(winPos);
-      mesEl = await waitForMessageElement(lastId, 2000);
-    }
-
-    const flipBtn =
-      mesEl?.querySelector(`${selectorBase}.fa-solid.interactable[role="button"]`) ||
-      mesEl?.querySelector(`${selectorBase}.interactable[role="button"]`) ||
-      mesEl?.querySelector(selectorBase);
-
-    if (!flipBtn) {
-      toastWarn(`最新楼层没有可用的${directionText}翻页按钮。`);
-      return false;
-    }
-
-    if (flipBtn.getAttribute('aria-disabled') === 'true' || flipBtn.classList.contains('disabled')) {
+    const ctx = getHostContext();
+    if (!Number.isFinite(lastId) || lastId < 0) { toastWarn('未找到最新楼层。'); return false; }
+    if (typeof ctx?.swipe?.to !== 'function') { toastWarn(`当前环境不支持${directionText}翻页。`); return false; }
+    const identity = getCurrentChatId(ctx);
+    try {
+      await swipeLatest(isLeft ? SWIPE_DIRECTION.LEFT : SWIPE_DIRECTION.RIGHT);
+      if (identity !== getCurrentChatId()) return false;
+      return true;
+    } catch (e) {
+      log('swipe.to 失败', e);
       toastInfo(`最新楼层当前没有${pageDirectionText}页可翻。`);
       return false;
     }
-
-    return triggerElementClick(flipBtn);
   }
 
   /**
@@ -776,53 +872,100 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
    * 同时解决“跳到某一楼后再次点击仍停留在同一楼/下一楼”的问题（之前按窗口中心算最可见，会被下一条抢占）。
    */
   function getAnchorMessageElement() {
-    const nodes = document.querySelectorAll('#chat .mes[mesid]');
+    const chat = getChatContainer();
+    const nodes = Array.from(chat?.querySelectorAll?.('.mes[mesid]') || []);
     if (!nodes.length) return null;
 
     const scrollEl = getChatScrollElement();
     if (!scrollEl) return nodes[nodes.length - 1];
-
     const vpRect = scrollEl.getBoundingClientRect();
     const vpTop = Number.isFinite(vpRect.top) ? vpRect.top : 0;
-    const vpBottom =
-      Number.isFinite(vpRect.bottom) && vpRect.bottom > vpTop
-        ? vpRect.bottom
-        : window.innerHeight || document.documentElement.clientHeight || 0;
+    const vpBottom = Number.isFinite(vpRect.bottom) && vpRect.bottom > vpTop
+      ? vpRect.bottom
+      : window.innerHeight || document.documentElement.clientHeight || 0;
+    const probeY = clamp(vpTop + 2, 0, Math.max(0, (window.innerHeight || vpBottom) - 1));
+    const probeX = clamp(vpRect.left + Math.min(Math.max(vpRect.width / 2, 8), Math.max(8, vpRect.width - 8)), 0, Math.max(0, window.innerWidth - 1));
 
-    // 用 1px 探针落在“视口顶部边缘”处：
-    // - 如果当前消息跨过顶部边缘（部分可见/已对齐到头部），就会被选为锚点
-    // - 否则选第一个出现在顶部边缘下方的可见消息
-    const probeY = vpTop + 1;
+    // 先从真实命中栈寻找覆盖聊天视口顶部的消息，避免 IntersectionObserver root/缓存滞后选错楼层。
+    try {
+      const hit = document.elementsFromPoint(probeX, probeY)
+        .map((el) => el.closest?.('#chat .mes[mesid]'))
+        .find((el) => el && chat.contains(el));
+      if (hit) return hit;
+    } catch {
+      /* geometry fallback below */
+    }
 
-    /** @type {HTMLElement|null} */
-    let cover = null;
-    let coverTop = -Infinity;
-
-    /** @type {HTMLElement|null} */
-    let below = null;
-    let belowTop = Infinity;
-
-    nodes.forEach((el) => {
+    let covering = null;
+    let coveringTop = -Infinity;
+    let firstBelow = null;
+    let firstBelowTop = Infinity;
+    for (const el of nodes) {
       const rect = el.getBoundingClientRect();
-      if (rect.bottom <= vpTop || rect.top >= vpBottom) return; // 不可见
-
-      // 覆盖顶部探针的消息：优先；如果出现多个，取 rect.top 更大的那个（更贴近顶部）
-      if (rect.top <= probeY && rect.bottom >= probeY) {
-        if (rect.top > coverTop) {
-          coverTop = rect.top;
-          cover = el;
-        }
-        return;
+      if (rect.bottom <= vpTop || rect.top >= vpBottom) continue;
+      if (rect.top <= probeY && rect.bottom >= probeY && rect.top > coveringTop) {
+        covering = el;
+        coveringTop = rect.top;
+      } else if (rect.top > probeY && rect.top < firstBelowTop) {
+        firstBelow = el;
+        firstBelowTop = rect.top;
       }
+    }
+    if (covering || firstBelow) return covering || firstBelow;
 
-      // 否则取顶部边缘下方的第一条可见消息
-      if (rect.top > probeY && rect.top < belowTop) {
-        belowTop = rect.top;
-        below = el;
-      }
-    });
+    // 缓存只作为末级回退，不再决定正常的当前楼层。
+    for (const id of visibleMessageIds) {
+      const el = getMessageElement(id);
+      if (el?.isConnected) return el;
+    }
+    return nodes[0];
+  }
 
-    return cover || below || nodes[0];
+  function resetMessageVisibilityObservers() {
+    try { messageVisibilityObserver?.disconnect(); } catch { /* ignore */ }
+    messageVisibilityObserver = null;
+    try { messageDomObserver?.disconnect(); } catch { /* ignore */ }
+    messageDomObserver = null;
+    visibleMessageIds.clear();
+  }
+
+  function scheduleMessageVisibilityObserverReset() {
+    try {
+      resetMessageVisibilityObservers();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          try { ensureMessageVisibilityObservers(); }
+          catch (error) { console.warn('[STCJ] visibility-observer', { stage: 'ensure', error }); }
+        });
+      });
+    } catch (error) {
+      console.warn('[STCJ] visibility-observer', { stage: 'schedule', error });
+    }
+  }
+
+  function ensureMessageVisibilityObservers() {
+    const chat = getChatContainer();
+    if (!chat || messageDomObserver || typeof window.IntersectionObserver !== 'function') return;
+    messageVisibilityObserver = new IntersectionObserver((entries) => entries.forEach((entry) => {
+      const id = parseInt(entry.target.getAttribute('mesid') || '', 10);
+      if (!Number.isNaN(id)) entry.isIntersecting ? visibleMessageIds.add(id) : visibleMessageIds.delete(id);
+    }), { root: getChatScrollElement(), threshold: 0.01 });
+    const observe = (root) => {
+      if (!messageVisibilityObserver) return;
+      if (root.matches?.('.mes[mesid]')) messageVisibilityObserver.observe(root);
+      root.querySelectorAll?.('.mes[mesid]').forEach((el) => messageVisibilityObserver?.observe(el));
+    };
+    observe(chat);
+    if (typeof window.MutationObserver === 'function') {
+      messageDomObserver = new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => node.nodeType === 1 && observe(node))));
+      messageDomObserver.observe(chat, { childList: true, subtree: true });
+    }
+  }
+
+  function alignCurrentMessage(block) {
+    const element = getAnchorMessageElement();
+    if (!element) return false;
+    return scrollMessageInChat(element, block, 'auto');
   }
 
   function getAnchorMesId() {
@@ -889,37 +1032,12 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     }
   }
 
-  async function trySlashChatJump(mesId) {
-    try {
-      const cmd = window.SillyTavern?.SlashCommandParser?.commands?.['chat-jump'];
-      if (cmd?.callback) {
-        await cmd.callback({}, String(mesId));
-        return true;
-      }
-    } catch (e) {
-      log('SlashCommandParser chat-jump 失败', e);
-    }
-    return false;
-  }
+  async function trySlashChatJump(mesId) { return executeChatJump(mesId); }
 
   async function waitForMessageElement(mesId, timeoutMs) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const el = document.querySelector(`#chat .mes[mesid="${mesId}"]`);
-      if (el) return el;
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(50);
-    }
-    return null;
-  }
-
-  function flashMessage(el) {
-    try {
-      el.classList.add('stcj-flash');
-      setTimeout(() => el.classList.remove('stcj-flash'), 900);
-    } catch {
-      /* ignore */
-    }
+    const eventTypes = getHostEventTypes();
+    return waitForDom({ root: getChatContainer(), find: () => getMessageElement(mesId), timeoutMs,
+      events: [eventTypes.MORE_MESSAGES_LOADED, eventTypes.MESSAGE_RECEIVED, eventTypes.MESSAGE_UPDATED] });
   }
 
   /**
@@ -936,18 +1054,17 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     const lastId = getLastMessageId();
     const targetId = clamp(mesId, 0, lastId);
 
-    // 先尝试用 chat-jump 让虚拟滚动加载目标消息（这一步通常会把目标滚到中间）
-    await trySlashChatJump(targetId);
-
-    // 有些情况下 chat-jump/scrollIntoView 会误滚动 window，导致页面上移出现灰底
-    restoreWindowScrollStable(winPos);
-
-    // 再等待 DOM 出现后，精确对齐到头/尾（只滚动聊天容器，不滚动 window）
-    const el = await waitForMessageElement(targetId, 2000);
-    if (el) {
-      scrollMessageInChat(el, block, 'smooth');
+    // 已渲染的消息直接精确滚动；否则才借助 /chat-jump 加载历史消息。
+    let el = getMessageElement(targetId);
+    if (!el) {
+      await trySlashChatJump(targetId);
       restoreWindowScrollStable(winPos);
-      flashMessage(el);
+      el = await waitForMessageElement(targetId, 2000);
+    }
+
+    if (el) {
+      scrollMessageInChat(el, block, 'auto');
+      restoreWindowScrollStable(winPos);
       return true;
     }
 
@@ -998,7 +1115,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
   function updateQuickEditButton(root) {
     const btn = getQuickEditButton(root);
     if (!btn) return;
-    const editing = !!quickEditState && isElementVisible(document.querySelector(QUICK_EDIT.EDIT_TEXTAREA_SELECTOR));
+    const editing = isElementVisible(document.querySelector(QUICK_EDIT.EDIT_TEXTAREA_SELECTOR));
     setIcon(btn, editing ? 'check' : 'pencil');
     btn.classList.toggle('stcj-editing', editing);
     btn.title = editing ? '保存编辑（完成）' : '快速编辑：选中文字可高亮定位；无选中则编辑当前楼层';
@@ -1604,53 +1721,24 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return el && isElementVisible(el) ? el : null;
   }
 
+  function getEditingMessageElement() {
+    const textarea = getCurrentEditTextarea();
+    return textarea?.closest?.('#chat .mes[mesid]') || null;
+  }
+
   async function waitForEditTextarea(mesEl, timeoutMs) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const ta = getCurrentEditTextarea();
-      if (ta) return ta;
-
-      // 兼容极少数情况下编辑器不是 curEditTextarea 的版本：尝试在消息内部找可见 textarea
+    const eventTypes = getHostEventTypes();
+    return waitForDom({ root: mesEl || getChatContainer(), timeoutMs, events: [eventTypes.MESSAGE_UPDATED], find: () => {
+      const current = getCurrentEditTextarea();
+      if (current) return current;
       const inner = mesEl?.querySelector?.('textarea');
-      if (inner && isElementVisible(inner)) return inner;
-
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(50);
-    }
-    return null;
+      return inner && isElementVisible(inner) ? inner : null;
+    } });
   }
 
-  function clickMessageEditButton(mesEl) {
-    if (!mesEl) return false;
+  async function openMessageEdit(mesId) { return openEditor(mesId); }
 
-    // 优先点击 .mes_edit
-    const direct = mesEl.querySelector('.mes_edit');
-    if (direct) {
-      direct.click();
-      return true;
-    }
-
-    for (const sel of QUICK_EDIT.EDIT_BUTTON_SELECTORS) {
-      const node = mesEl.querySelector(sel);
-      if (!node) continue;
-      const clickable = node.closest?.('.mes_edit, button, .menu_button, div') || node;
-      if (clickable && typeof clickable.click === 'function') {
-        clickable.click();
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  function clickMessageDoneButton(mesEl) {
-    const done = mesEl?.querySelector?.(QUICK_EDIT.DONE_BUTTON_SELECTOR);
-    if (done && typeof done.click === 'function') {
-      done.click();
-      return true;
-    }
-    return false;
-  }
+  function clickMessageDoneButton(mesEl) { return commitEditor(mesEl); }
 
   function detachQuickEditOutsideListener() {
     try {
@@ -1663,16 +1751,54 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   function clearQuickEditState() {
     detachQuickEditOutsideListener();
-    try {
-      if (quickEditState?.monitorTimer) {
-        clearInterval(quickEditState.monitorTimer);
-      }
-    } catch {
-      /* ignore */
-    }
+    try { quickEditState?.detachMonitor?.(); } catch { /* ignore */ }
     quickEditState = null;
     const root = document.getElementById(ROOT_ID);
     if (root) updateQuickEditButton(root);
+  }
+
+  function attachQuickEditMonitor(mesEl) {
+    if (!quickEditState) return;
+    const state = quickEditState;
+    const ctx = getHostContext();
+    const eventTypes = getHostEventTypes(ctx);
+    const events = [eventTypes.MESSAGE_UPDATED, eventTypes.MESSAGE_DELETED, eventTypes.CHAT_CHANGED].filter(Boolean);
+    const check = () => { if (quickEditState === state && !getCurrentEditTextarea()) clearQuickEditState(); };
+    const observer = window.MutationObserver ? new MutationObserver(check) : null;
+    observer?.observe(mesEl || getChatContainer(), { childList: true, subtree: true });
+    events.forEach((event) => ctx?.eventSource?.on?.(event, check));
+    let detached = false;
+    state.detachMonitor = () => {
+      if (detached) return;
+      detached = true;
+      observer?.disconnect();
+      events.forEach((event) => ctx?.eventSource?.removeListener?.(event, check));
+    };
+  }
+
+  function waitForEditorClosed(mesEl, timeoutMs = 2000) {
+    if (!getCurrentEditTextarea()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const ctx = getHostContext();
+      const eventTypes = getHostEventTypes(ctx);
+      const events = [eventTypes.MESSAGE_UPDATED, eventTypes.MESSAGE_DELETED, eventTypes.CHAT_CHANGED].filter(Boolean);
+      let settled = false;
+      const observer = window.MutationObserver ? new MutationObserver(check) : null;
+      let timer = null;
+      function finish(closed) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        observer?.disconnect();
+        events.forEach((event) => ctx?.eventSource?.removeListener?.(event, check));
+        resolve(closed);
+      }
+      function check() { if (!getCurrentEditTextarea()) finish(true); }
+      observer?.observe(mesEl || getChatContainer(), { childList: true, subtree: true });
+      events.forEach((event) => ctx?.eventSource?.on?.(event, check));
+      timer = setTimeout(() => finish(!getCurrentEditTextarea()), timeoutMs);
+      check();
+    });
   }
 
   function attachQuickEditOutsideListener() {
@@ -1745,8 +1871,8 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       }
 
       // 4) 先点击编辑，让酒馆把 textarea 真正挂到当前楼层上
-      if (!clickMessageEditButton(mesEl)) {
-        toastWarn('未找到该楼层的编辑按钮（.mes_edit）。');
+      if (!await openMessageEdit(targetMesId)) {
+        toastWarn('无法打开该楼层的编辑器。');
         return false;
       }
 
@@ -1791,27 +1917,12 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
         scrollEl,
         selectionCtx,
         detachOutside: null,
-        monitorTimer: null,
+        detachMonitor: null,
+        chatId: getCurrentChatId(),
       };
 
       attachQuickEditOutsideListener();
-
-      // 监控：如果用户用酒馆自带按钮关闭编辑器，也要同步清状态
-      quickEditState.monitorTimer = setInterval(() => {
-        if (!quickEditState) return;
-        if (!getCurrentEditTextarea()) {
-          const st = quickEditState;
-          clearQuickEditState();
-          // 用户可能点了酒馆自带“完成”按钮：同样归位
-          if (st?.scrollEl && typeof st.scrollTop === 'number' && Number.isFinite(st.scrollTop)) {
-            try {
-              st.scrollEl.scrollTo({ top: st.scrollTop, behavior: 'auto' });
-            } catch {
-              st.scrollEl.scrollTop = st.scrollTop;
-            }
-          }
-        }
-      }, 400);
+      attachQuickEditMonitor(mesEl);
 
       const root = document.getElementById(ROOT_ID);
       if (root) updateQuickEditButton(root);
@@ -1824,32 +1935,28 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   async function quickEditSave() {
     if (quickEditBusy) return false;
-    if (!quickEditState) return false;
+    const existingEditor = getCurrentEditTextarea();
+    if (!quickEditState && !existingEditor) return false;
     quickEditBusy = true;
     try {
-      const mesEl = document.querySelector(`#chat .mes[mesid="${quickEditState.mesId}"]`);
+      const state = quickEditState;
+      if (state?.chatId && state.chatId !== getCurrentChatId()) { clearQuickEditState(); return false; }
+      const mesEl = (state ? getMessageElement(state.mesId) : null) || getEditingMessageElement();
       if (!mesEl) {
         clearQuickEditState();
         return false;
       }
 
+      const scrollEl = state?.scrollEl || getChatScrollElement();
+      const restoreTop = state?.scrollTop;
+      const editorClosed = waitForEditorClosed(mesEl, 2000);
+
       if (!clickMessageDoneButton(mesEl)) {
-        // 可能编辑器已被用户关闭
         clearQuickEditState();
         return false;
       }
 
-      const scrollEl = quickEditState.scrollEl;
-      const restoreTop = quickEditState.scrollTop;
-
-      // 等待编辑器关闭后再“归位”，避免被酒馆的 DOM 更新打断
-      const start = Date.now();
-      while (Date.now() - start < 2000) {
-        if (!getCurrentEditTextarea()) break;
-        // eslint-disable-next-line no-await-in-loop
-        await sleep(50);
-      }
-
+      await editorClosed;
       clearQuickEditState();
 
       if (scrollEl && typeof restoreTop === 'number' && Number.isFinite(restoreTop)) {
@@ -1868,10 +1975,83 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   async function handleQuickEditAction() {
     // 二段式：未在编辑 -> 打开；已在编辑 -> 保存
-    if (quickEditState && getCurrentEditTextarea()) {
+    if (getCurrentEditTextarea()) {
       return quickEditSave();
     }
     return quickEditOpen();
+  }
+
+  let quickDeleteBusy = false;
+
+  function getSelectedMessageIdForDelete() {
+    const selection = getSelectionInfo();
+    if (selection && Number.isInteger(selection.mesId)) {
+      return selection.mesId;
+    }
+    return getLastMessageId();
+  }
+
+  function getNativeSwipeDeletionIndex(ctx, targetMesId) {
+    const message = ctx?.chat?.[targetMesId];
+    const selectedSwipe = Number(message?.swipe_id);
+    const swipes = Array.isArray(message?.swipes) ? message.swipes : [];
+    const confirmationEnabled = !!ctx?.powerUserSettings?.confirm_message_delete;
+    const isLatestMessage = targetMesId === ctx.chat.length - 1;
+    const validSwipe = Number.isInteger(selectedSwipe) && selectedSwipe >= 0 && selectedSwipe < swipes.length;
+    return confirmationEnabled && isLatestMessage && !message?.is_user && swipes.length > 1 && validSwipe
+      ? selectedSwipe
+      : undefined;
+  }
+
+  async function requestNativeMessageDelete() {
+    if (quickDeleteBusy) return false;
+    if (getCurrentEditTextarea()) {
+      toastWarn('请先完成当前消息编辑，再执行删除。');
+      return false;
+    }
+
+    const ctx = getHostContext();
+    const targetMesId = getSelectedMessageIdForDelete();
+    if (!Array.isArray(ctx?.chat) || !ctx.chat[targetMesId]) {
+      toastWarn('未找到可删除的楼层。');
+      return false;
+    }
+
+    quickDeleteBusy = true;
+    try {
+      let mesEl = getMessageElement(targetMesId);
+      if (!mesEl) {
+        await executeChatJump(targetMesId);
+        mesEl = await waitForMessageElement(targetMesId, 2000);
+      }
+      if (!mesEl) {
+        toastWarn('未能加载目标楼层，无法打开删除确认。');
+        return false;
+      }
+
+      // 复刻 ST 原生 .mes_edit_delete 的 canDeleteSwipe 判定，恢复 Delete Swipe / Delete Message 选项。
+      if (typeof ctx.deleteMessage === 'function') {
+        const swipeDeletionIndex = getNativeSwipeDeletionIndex(ctx, targetMesId);
+        await ctx.deleteMessage(targetMesId, swipeDeletionIndex, true);
+        return true;
+      }
+
+      // 旧版兼容：先用原生 messageEdit 设置 this_edit_mes_id，再点击原生删除按钮。
+      if (!await openEditor(targetMesId)) return false;
+      const deleteButton = mesEl.querySelector('.mes_edit_delete');
+      if (!(deleteButton instanceof HTMLElement)) {
+        toastWarn('未找到 SillyTavern 原生删除按钮。');
+        return false;
+      }
+      deleteButton.click();
+      return true;
+    } catch (error) {
+      log('快速删除失败', error);
+      toastError('打开原生删除确认失败，请稍后重试。');
+      return false;
+    } finally {
+      quickDeleteBusy = false;
+    }
   }
 
   function formatRangeText(range) {
@@ -2021,9 +2201,11 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return value.trim();
   }
 
-  async function showFloorRange(rawInput = null) {
+  async function showFloorRangeImpl(rawInput = null) {
     const ctx = window.SillyTavern?.getContext?.();
-    const chat = Array.isArray(ctx?.chat) ? ctx.chat : null;
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat.slice() : null;
+    const chatId = getCurrentChatId(ctx);
+    const operationSeq = ++rangeOperationSeq;
     const chatEl = getChatContainer();
 
     if (!chat || !chatEl || chat.length === 0) {
@@ -2051,11 +2233,14 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       return false;
     }
 
+    if (chatId !== getCurrentChatId() || operationSeq !== rangeOperationSeq) return false;
     chatEl.replaceChildren();
     for (let i = range.start; i <= range.end; i++) {
-      ctx.addOneMessage(chat[i], { forceId: i });
+      await ctx.addOneMessage(chat[i], { forceId: i, scroll: false, showSwipes: false });
     }
 
+    if (chatId !== getCurrentChatId() || operationSeq !== rangeOperationSeq) return false;
+    ctx.swipe?.refresh?.();
     setActiveRange(range);
 
     // 如果是单数字跳转模式，滚动到目标楼层
@@ -2071,7 +2256,6 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
         await sleep(50);
         scrollMessageInChat(targetEl, 'start', 'auto');
         restoreWindowScrollStable(winPos);
-        flashMessage(targetEl);
       } else {
         getChatScrollElement()?.scrollTo?.({ top: 0, behavior: 'auto' });
       }
@@ -2140,14 +2324,16 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
    * - shift: 平移窗口（保持区间长度不变）
    * 步长 = 用户自定义的 rangeStep（默认 10），模式 = 用户设置。
    */
-  async function shiftFloorRange(direction) {
+  async function shiftFloorRangeImpl(direction) {
     if (!activeRange) {
       toastWarn('当前没有激活的楼层区间。');
       return false;
     }
 
     const ctx = window.SillyTavern?.getContext?.();
-    const chat = Array.isArray(ctx?.chat) ? ctx.chat : null;
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat.slice() : null;
+    const chatId = getCurrentChatId(ctx);
+    const operationSeq = ++rangeOperationSeq;
     const chatEl = getChatContainer();
     if (!chat || !chatEl || chat.length === 0) {
       toastWarn('当前聊天为空。');
@@ -2205,12 +2391,15 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     const anchorState = captureViewportAnchor();
     const winPos = captureWindowScroll();
 
+    if (chatId !== getCurrentChatId() || operationSeq !== rangeOperationSeq) return false;
     chatEl.replaceChildren();
     for (let i = newStart; i <= newEnd; i++) {
-      ctx.addOneMessage(chat[i], { forceId: i });
+      await ctx.addOneMessage(chat[i], { forceId: i, scroll: false, showSwipes: false });
     }
 
     const range = { start: newStart, end: newEnd };
+    if (chatId !== getCurrentChatId() || operationSeq !== rangeOperationSeq) return false;
+    ctx.swipe?.refresh?.();
     setActiveRange(range);
 
     // 扩展模式下，原阅读位置必然还在新区间内；
@@ -2244,6 +2433,28 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     toastSuccess(`已切换区间：${newStart}-${newEnd}（${formatRangePagingModeLabel(pagingMode)}模式）`);
     return true;
   }
+
+  async function runRangeTransaction(operation) {
+    if (rangeBusy) { toastInfo('区间操作正在进行，请稍候。'); return false; }
+
+    const ctx = getHostContext();
+    const swipeState = ctx?.swipe?.state?.();
+    if (quickEditState || getCurrentEditTextarea()) {
+      toastWarn('请先完成当前消息编辑，再进行区间操作。');
+      return false;
+    }
+    if (swipeState && swipeState !== 'none') {
+      toastWarn('消息正在切换分支，请稍后再进行区间操作。');
+      return false;
+    }
+
+    rangeBusy = true;
+    try { return await operation(); }
+    finally { rangeBusy = false; }
+  }
+
+  function showFloorRange(rawInput = null) { return runRangeTransaction(() => showFloorRangeImpl(rawInput)); }
+  function shiftFloorRange(direction) { return runRangeTransaction(() => shiftFloorRangeImpl(direction)); }
 
   async function handleAction(action) {
     const lastId = getLastMessageId();
@@ -2308,18 +2519,16 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       }
 
       // H/L：对齐“当前楼层”的头部/尾部
-      case 'currentHead': {
-        const anchor = getAnchorMesId();
-        return jumpToMessage(anchor, 'start');
-      }
-      case 'currentTail': {
-        const anchor = getAnchorMesId();
-        return jumpToMessage(anchor, 'end');
-      }
+      case 'currentHead':
+        return alignCurrentMessage('start');
+      case 'currentTail':
+        return alignCurrentMessage('end');
 
       // ✏️ 快速编辑（选中内容可高亮定位）
       case 'quickEdit':
         return handleQuickEditAction();
+      case 'quickDelete':
+        return requestNativeMessageDelete();
 
       default:
         return;
@@ -2469,14 +2678,9 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   function renderFavoriteMarkdown(text) {
     const raw = String(text ?? '');
-    try {
-      if (typeof window.marked?.parse === 'function') {
-        return window.marked.parse(raw, { breaks: true });
-      }
-    } catch {
-      /* ignore */
-    }
-    return renderFavoriteMarkdownFallback(raw);
+    let html = '';
+    try { if (typeof window.marked?.parse === 'function') html = window.marked.parse(raw, { breaks: true }); } catch { /* ignore */ }
+    return sanitizeFavoriteOutput(html || renderFavoriteMarkdownFallback(raw));
   }
 
   function normalizeFavoritePreviewMode(mode) {
@@ -2626,7 +2830,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     }
   }
 
-  function sanitizeHtml(html) {
+  function sanitizeFavoriteOutput(html) {
     try {
       if (window.DOMPurify?.sanitize) {
         return window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
@@ -2652,7 +2856,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       });
       return tpl.innerHTML;
     } catch {
-      return String(html ?? '');
+      return escapeHtml(String(html ?? ''));
     }
   }
 
@@ -2805,13 +3009,14 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
       const send = () => {
         const h = getHeight();
-        parent.postMessage({ type: 'stcj:favorites-preview-height', token: ${JSON.stringify(token)}, key: ${JSON.stringify(frameKey)}, height: h }, '*');
+        parent.postMessage({ protocol: 'stcj-favorites-preview-v1', type: 'height', token: ${JSON.stringify(token)}, key: ${JSON.stringify(frameKey)}, height: h }, '*');
       };
-      const ro = window.ResizeObserver ? new ResizeObserver(() => send()) : null;
+      let raf = 0; const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(send); };
+      const ro = window.ResizeObserver ? new ResizeObserver(schedule) : null;
       if (ro) ro.observe(document.documentElement);
       if (ro && document.body) ro.observe(document.body);
-      const mo = new MutationObserver(() => send());
-      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+      const mo = new MutationObserver(schedule);
+      mo.observe(document.body || document.documentElement, { childList: true, subtree: true });
       window.addEventListener('load', send);
       setTimeout(send, 0); setTimeout(send, 50); setTimeout(send, 200); setTimeout(send, 500);
     })();`;
@@ -2822,11 +3027,13 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     if (favoritesPreviewMessageListenerAttached) return;
     const onPreviewMessage = (event) => {
       const data = event?.data;
-      if (!data || data.type !== 'stcj:favorites-preview-height') return;
+      if (!data || data.protocol !== 'stcj-favorites-preview-v1' || data.type !== 'height') return;
       if (data.token !== favoritesPreviewIframeToken) return;
       const frame = document.getElementById(getFavoritePreviewFrameId(data.key));
-      if (!frame) return;
-      const height = Math.max(96, Math.round(Number(data.height) || 0));
+      if (!frame || event.source !== frame.contentWindow) return;
+      // srcdoc 通常是 opaque/null origin；source + token + frame key 构成边界校验。
+      if (event.origin && event.origin !== 'null' && event.origin !== location.origin) return;
+      const height = Math.min(2400, Math.max(96, Math.round(Number(data.height) || 0)));
       frame.style.height = `${height}px`;
     };
     window.addEventListener('message', onPreviewMessage);
@@ -2836,26 +3043,48 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     favoritesPreviewMessageListenerAttached = true;
   }
 
+  function hasRenderableFavoriteHtml(html) {
+    const raw = String(html || '').trim();
+    if (!raw) return false;
+    try {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = raw;
+      if (normalizeFavoriteText(tpl.content.textContent || '')) return true;
+      return !!tpl.content.querySelector('img,video,audio,canvas,svg,table,pre,code,details');
+    } catch {
+      return false;
+    }
+  }
+
+  function buildFavoriteRenderableHtml(rawText, formattedHtml) {
+    const sanitizedFormatted = formattedHtml ? sanitizeFavoriteOutput(formattedHtml) : '';
+    const output = hasRenderableFavoriteHtml(sanitizedFormatted)
+      ? sanitizedFormatted
+      : renderFavoriteMarkdown(rawText);
+    return decorateFavoriteInlineSemantics(output || '<div class="stcj-empty-copy">原消息内容不可用。</div>');
+  }
+
   async function prepareFavoritePreviewPayload(item, resolution) {
     const message = resolution.status === 'missing' ? null : resolution.message;
     const mesId = resolution.status === 'missing' ? item.messageId : resolution.mesId;
     const snapshot = resolution.status === 'missing' ? null : resolveFavoriteMessageSnapshot(item, message);
     const senderName = item.sender || message?.name || '未知发送者';
     const isUser = !!message?.is_user;
-    const originalText = resolution.status === 'missing'
-      ? (item.previewText || '')
-      : String(snapshot?.matched ? snapshot.text : (item.previewText || snapshot?.text || ''));
-    const originalReasoning = resolution.status === 'missing' || !snapshot?.matched
+    const liveText = message
+      ? String(getCurrentMessageSnapshot(message).text || getMessageContentText(message) || '')
+      : '';
+    const originalText = liveText || String(item.previewText || snapshot?.text || '');
+    const originalReasoning = resolution.status === 'missing' || !snapshot
       ? ''
       : String(snapshot.reasoning || '');
-    const rawText = await applyFavoritesRegexPipeline(originalText, 2);
-    const reasoningRaw = await applyFavoritesRegexPipeline(originalReasoning, 6);
+    const regexText = await applyFavoritesRegexPipeline(originalText, 2);
+    const rawText = String(regexText || originalText || '');
+    const regexReasoning = await applyFavoritesRegexPipeline(originalReasoning, 6);
+    const reasoningRaw = String(regexReasoning || originalReasoning || '');
     const formattedHtml = applySillyTavernMessageFormatting(rawText, senderName, isUser, mesId);
     const reasoningHtml = reasoningRaw ? applySillyTavernMessageFormatting(reasoningRaw, null, false, null) : '';
-    const processedPreviewHtml = formattedHtml
-      ? decorateFavoriteInlineSemantics(sanitizeHtml(formattedHtml))
-      : (rawText ? decorateFavoriteInlineSemantics(renderFavoriteMarkdown(rawText)) : '<div class="stcj-empty-copy">原消息内容不可用。</div>');
-    const processedReasoningHtml = reasoningHtml ? decorateFavoriteInlineSemantics(sanitizeHtml(reasoningHtml)) : '';
+    const processedPreviewHtml = buildFavoriteRenderableHtml(rawText, formattedHtml);
+    const processedReasoningHtml = reasoningHtml ? decorateFavoriteInlineSemantics(sanitizeFavoriteOutput(reasoningHtml)) : '';
     return {
       rawText,
       formattedHtml,
@@ -2963,7 +3192,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       const snapshot = getFavoriteResolvedSnapshot(entry.item, entry.resolution);
       const floor = entry.resolution.status === 'missing' ? '未定位' : formatFloorLabel(entry.resolution.mesId);
       const swipeIndex = getFavoriteResolvedSwipeIndex(entry.item, entry.resolution);
-      const summary = escapeHtml(getFavoriteListSummary(entry.item));
+      const summary = escapeHtml(getFavoriteListSummary(entry.item, entry.resolution));
       const currentBranchBadge = buildFavoriteCurrentBranchBadgeHtml(entry.item, entry.resolution, detailEntries);
       const active = entry.item.id === favoritesModalActiveId ? 'is-active' : '';
       const status = getFavoriteStatusLabel(entry.resolution.status, snapshot);
@@ -3020,38 +3249,30 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   function renderHtmlCodeIframesInElement(container) {
     if (!container) return;
-    container.querySelectorAll('pre').forEach((preEl) => {
+    container.querySelectorAll('pre').forEach((preEl, index) => {
       const codeContent = preEl.textContent || '';
       if (!codeContent.includes('<body') || !codeContent.includes('</body>')) return;
+
+      const frameKey = `inline-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
+      const heightScript = `<script>(()=>{const send=()=>parent.postMessage({protocol:'stcj-favorites-preview-v1',type:'height',token:${JSON.stringify(favoritesPreviewIframeToken)},key:${JSON.stringify(frameKey)},height:Math.max(document.body?.scrollHeight||0,document.documentElement?.scrollHeight||0)},'*');let raf=0;const schedule=()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(send)};new ResizeObserver(schedule).observe(document.documentElement);if(document.body)new ResizeObserver(schedule).observe(document.body);new MutationObserver(schedule).observe(document.body||document.documentElement,{childList:true,subtree:true});addEventListener('load',schedule);schedule()})()<\/script>`;
       let srcdoc = codeContent;
-      const bridgeScript = `<script>(function(){try{['getContext','toastr','jQuery','$','_'].forEach(function(name){if(window.parent&&typeof window.parent[name]!=='undefined'){window[name]=window.parent[name];}});}catch(e){console.error('STCJ preview bridge error',e);}})();<\/script>`;
-      const headTagMatch = srcdoc.match(/<head\s*>/i);
+      const headTagMatch = srcdoc.match(/<head(?:\s[^>]*)?>/i);
       if (headTagMatch) {
         const injectionPoint = headTagMatch.index + headTagMatch[0].length;
-        srcdoc = srcdoc.slice(0, injectionPoint) + bridgeScript + srcdoc.slice(injectionPoint);
+        srcdoc = srcdoc.slice(0, injectionPoint) + heightScript + srcdoc.slice(injectionPoint);
       } else {
-        srcdoc = bridgeScript + srcdoc;
+        srcdoc = heightScript + srcdoc;
       }
+
       const iframe = document.createElement('iframe');
+      iframe.id = getFavoritePreviewFrameId(frameKey);
       iframe.className = 'stcj-star-inline-iframe';
+      iframe.dataset.previewFrameKey = frameKey;
+      iframe.setAttribute('sandbox', 'allow-scripts');
+      iframe.setAttribute('referrerpolicy', 'no-referrer');
+      iframe.setAttribute('loading', 'lazy');
+      iframe.style.height = '160px';
       iframe.setAttribute('srcdoc', srcdoc);
-      iframe.addEventListener('load', () => {
-        try {
-          const contentWindow = iframe.contentWindow;
-          const body = contentWindow?.document?.body;
-          const head = contentWindow?.document?.head;
-          if (!body || !head) return;
-          const style = contentWindow.document.createElement('style');
-          style.innerHTML = 'body { margin: 0; overflow: hidden; }';
-          head.appendChild(style);
-          const updateHeight = () => { iframe.style.height = `${body.scrollHeight}px`; };
-          const observer = window.ResizeObserver ? new ResizeObserver(updateHeight) : null;
-          observer?.observe(body);
-          updateHeight();
-        } catch {
-          /* ignore */
-        }
-      });
       preEl.replaceWith(iframe);
     });
   }
@@ -3070,7 +3291,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     try {
       const ctx = window.SillyTavern?.getContext?.();
       if (!ctx?.chatMetadata || typeof ctx.chatMetadata !== 'object') return null;
-      if (!Array.isArray(ctx.chatMetadata[FAVORITES_METADATA_KEY])) {
+      if (ctx.chatMetadata[FAVORITES_METADATA_KEY] == null) {
         ctx.chatMetadata[FAVORITES_METADATA_KEY] = [];
       }
       return ctx.chatMetadata;
@@ -3154,7 +3375,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       text: String(item?.previewText || fallbackEntry?.text || baseText || ''),
       swipeIndex: storedSwipeIndex >= 0 ? storedSwipeIndex : (fallbackEntry ? fallbackEntry.index : -1),
       matched: false,
-      swipeMissing: storedSwipeIndex >= 0,
+      swipeMissing: false,
       reasoning: '',
       media: fallbackEntry?.media ?? message?.extra?.media ?? null,
     };
@@ -3162,20 +3383,73 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   function normalizeFavoriteItem(item, index) {
     const now = Date.now() + index;
-    const previewText = normalizeFavoriteText(item?.previewText || '');
-    const sendDate = item?.sendDate == null ? '' : String(item.sendDate);
+    const source = item && typeof item === 'object' ? item : {};
+    const legacyMessageId = typeof item === 'number' || (typeof item === 'string' && /^\d+$/.test(item.trim()))
+      ? item
+      : (source.messageId ?? source.mesId ?? source.mes_id ?? source.floor ?? source.floorId ?? source.id);
+    const legacyPreview = source.previewText ?? source.preview ?? source.text ?? source.messageText ?? source.mes ?? '';
+    const legacyNote = source.note ?? source.memo ?? source.remark ?? source.comment ?? '';
+    const previewText = normalizeFavoriteText(legacyPreview);
+    const sendDate = source.sendDate ?? source.send_date ?? source.date ?? '';
+    const stableId = typeof source.id === 'string' && source.id && !/^\d+$/.test(source.id)
+      ? source.id
+      : `stcj-fav-${now}-${index}`;
     return {
-      id: typeof item?.id === 'string' && item.id ? item.id : `stcj-fav-${now}-${index}`,
-      messageId: Math.max(0, Math.round(Number(item?.messageId) || 0)),
-      swipeIndex: normalizeFavoriteSwipeIndex(item?.swipeIndex),
-      note: String(item?.note || ''),
-      textHash: String(item?.textHash || ''),
+      id: stableId,
+      messageId: Math.max(0, Math.round(Number(legacyMessageId) || 0)),
+      swipeIndex: normalizeFavoriteSwipeIndex(source.swipeIndex ?? source.swipe_id ?? source.swipeId),
+      note: String(legacyNote || ''),
+      textHash: String(source.textHash ?? source.text_hash ?? source.hash ?? ''),
       previewText,
-      sender: String(item?.sender || ''),
-      sendDate,
-      createdAt: Number.isFinite(Number(item?.createdAt)) ? Number(item.createdAt) : now,
-      updatedAt: Number.isFinite(Number(item?.updatedAt)) ? Number(item.updatedAt) : now,
+      sender: String(source.sender ?? source.name ?? source.characterName ?? ''),
+      sendDate: sendDate == null ? '' : String(sendDate),
+      createdAt: Number.isFinite(Number(source.createdAt ?? source.created_at)) ? Number(source.createdAt ?? source.created_at) : now,
+      updatedAt: Number.isFinite(Number(source.updatedAt ?? source.updated_at)) ? Number(source.updatedAt ?? source.updated_at) : now,
     };
+  }
+
+  function parseStoredFavoriteRecords(metadata) {
+    const stored = metadata?.[FAVORITES_METADATA_KEY];
+    if (Array.isArray(stored)) return { ok: true, format: 'array', records: stored };
+    if (stored == null) return { ok: true, format: 'empty', records: [] };
+    if (typeof stored === 'string') {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return { ok: true, format: 'json-array', records: parsed };
+        if (parsed && typeof parsed === 'object') {
+          return parseStoredFavoriteRecords({ [FAVORITES_METADATA_KEY]: parsed });
+        }
+      } catch (error) {
+        log('收藏读取失败：旧 JSON 字符串无法解析，保留原字段', error);
+      }
+      return { ok: false, format: 'invalid-json', records: [] };
+    }
+    if (typeof stored !== 'object') return { ok: false, format: typeof stored, records: [] };
+    if (Array.isArray(stored.items)) return { ok: true, format: 'object-items', records: stored.items };
+    if (Array.isArray(stored.favorites)) return { ok: true, format: 'object-favorites', records: stored.favorites };
+    if (Array.isArray(stored.favoriteMesIds)) return { ok: true, format: 'legacy-id-list', records: stored.favoriteMesIds };
+    const records = Object.entries(stored).map(([floor, value]) => {
+      if (value && typeof value === 'object') {
+        return { ...value, messageId: value.messageId ?? value.mesId ?? floor };
+      }
+      return { messageId: floor, note: typeof value === 'string' ? value : '' };
+    });
+    return { ok: true, format: 'object-map', records };
+  }
+
+  function hydrateLegacyFavoriteItem(item, messages) {
+    const message = messages?.[item.messageId];
+    if (!message) return item;
+    if (item.previewText && item.textHash && item.sender && item.sendDate) return item;
+    const snapshot = getCurrentMessageSnapshot(message);
+    const rawText = snapshot.text || getMessageContentText(message) || '';
+    const normalizedText = normalizeFavoriteText(rawText);
+    if (!item.previewText && normalizedText) item.previewText = normalizedText.slice(0, 160);
+    if (!item.textHash && normalizedText) item.textHash = computeTextHash(normalizedText);
+    if (!item.sender) item.sender = String(message.name || '');
+    if (!item.sendDate && message.send_date != null) item.sendDate = String(message.send_date);
+    if (item.swipeIndex < 0 && snapshot.swipeIndex >= 0) item.swipeIndex = snapshot.swipeIndex;
+    return item;
   }
 
   function applyFavoriteItemUpdate(item, mesId, message) {
@@ -3194,34 +3468,50 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return item;
   }
 
-  function syncFavoriteItemsToMetadata() {
-    const metadata = ensureFavoritesMetadata();
-    if (!metadata) return false;
-    metadata[FAVORITES_METADATA_KEY] = favoriteItems.map((item, index) => normalizeFavoriteItem(item, index));
-    favoriteItems = metadata[FAVORITES_METADATA_KEY];
+  function syncFavoriteItemsToMetadata(chatId = getCurrentChatId(), metadata = ensureFavoritesMetadata(), snapshot = favoriteItems) {
+    if (!chatId || !metadata) return false;
+    metadata[FAVORITES_METADATA_KEY] = snapshot.map((item, index) => normalizeFavoriteItem(item, index));
     return true;
   }
 
-  function persistFavoritesNow() {
-    if (favoritesSaveTimer) {
-      clearTimeout(favoritesSaveTimer);
-      favoritesSaveTimer = null;
+  function persistFavoritesSnapshot(chatId, metadata, snapshot, ctx) {
+    if (!chatId || !metadata || !Array.isArray(snapshot)) return false;
+    metadata[FAVORITES_METADATA_KEY] = snapshot.map((item, index) => normalizeFavoriteItem(item, index));
+    // saveMetadataDebounced 会在调用时读取“当前聊天”，不能在已经切换后拿它保存旧聊天。
+    if (getCurrentChatId() === chatId) {
+      try { ctx?.saveMetadataDebounced?.(); } catch { /* ignore */ }
     }
-    if (!syncFavoriteItemsToMetadata()) return;
-    try {
-      const ctx = window.SillyTavern?.getContext?.();
-      ctx?.saveMetadataDebounced?.();
-    } catch {
-      /* ignore */
+    pendingFavoriteSnapshots.delete(chatId);
+    return true;
+  }
+
+  function flushPendingFavoriteSnapshot(chatId) {
+    const pending = chatId ? pendingFavoriteSnapshots.get(chatId) : null;
+    if (pending) persistFavoritesSnapshot(pending.chatId, pending.metadata, pending.snapshot, pending.ctx);
+  }
+
+  function flushAllPendingFavoriteSnapshots() {
+    for (const chatId of [...pendingFavoriteSnapshots.keys()]) {
+      flushPendingFavoriteSnapshot(chatId);
     }
   }
 
+  function persistFavoritesNow() {
+    if (favoritesSaveTimer) { clearTimeout(favoritesSaveTimer); favoritesSaveTimer = null; }
+    const chatId = getCurrentChatId();
+    flushPendingFavoriteSnapshot(chatId);
+  }
+
   function scheduleFavoritesSave() {
+    const ctx = getHostContext();
+    const chatId = getCurrentChatId(ctx);
+    const metadata = ctx?.chatMetadata;
+    if (!chatId || !metadata) return;
+    const snapshot = favoriteItems.map((item, index) => normalizeFavoriteItem(item, index));
+    metadata[FAVORITES_METADATA_KEY] = snapshot;
+    pendingFavoriteSnapshots.set(chatId, { chatId, metadata, snapshot, ctx });
     if (favoritesSaveTimer) clearTimeout(favoritesSaveTimer);
-    favoritesSaveTimer = setTimeout(() => {
-      favoritesSaveTimer = null;
-      persistFavoritesNow();
-    }, FAVORITES_SAVE_DEBOUNCE);
+    favoritesSaveTimer = setTimeout(() => { favoritesSaveTimer = null; flushPendingFavoriteSnapshot(chatId); }, FAVORITES_SAVE_DEBOUNCE);
   }
 
   function touchFavoritesUI() {
@@ -3232,14 +3522,47 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   function refreshFavoritesFromMetadata() {
     const metadata = ensureFavoritesMetadata();
-    favoriteItems = Array.isArray(metadata?.[FAVORITES_METADATA_KEY])
-      ? metadata[FAVORITES_METADATA_KEY].map((item, index) => normalizeFavoriteItem(item, index))
-      : [];
+    const messages = getCurrentChatMessages();
+    const parsed = parseStoredFavoriteRecords(metadata);
+    if (!parsed.ok) {
+      console.warn('[STCJ] 收藏诊断', {
+        chatId: getCurrentChatId(),
+        stage: 'read',
+        format: parsed.format,
+        raw: 0,
+        normalized: 0,
+        resolved: 0,
+        renderable: 0,
+      });
+      return false;
+    }
+
+    favoriteItems = parsed.records
+      .map((item, index) => hydrateLegacyFavoriteItem(normalizeFavoriteItem(item, index), messages));
+    const resolutions = favoriteItems.map((item) => resolveFavoriteTarget(item, messages));
+    const resolved = resolutions.filter((entry) => entry?.message).length;
+    const renderable = favoriteItems.filter((item, index) => {
+      const message = resolutions[index]?.message;
+      const liveText = message ? getCurrentMessageSnapshot(message).text || getMessageContentText(message) : '';
+      return !!normalizeFavoriteText(liveText || item.previewText || item.note);
+    }).length;
+    console.info('[STCJ] 收藏诊断', {
+      chatId: getCurrentChatId(),
+      stage: 'ready',
+      format: parsed.format,
+      raw: parsed.records.length,
+      normalized: favoriteItems.length,
+      resolved,
+      renderable,
+    });
+
+    // 只有成功读取后才回写规范化结构，禁止解析失败时覆盖旧数据。
     if (metadata) metadata[FAVORITES_METADATA_KEY] = favoriteItems;
     if (favoriteQuickMenuId && !favoriteItems.some((item) => item.id === favoriteQuickMenuId)) {
       favoriteQuickMenuId = null;
     }
     touchFavoritesUI();
+    return true;
   }
 
   function buildFavoriteItemFromMessage(mesId, message) {
@@ -3276,6 +3599,18 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return null;
   }
 
+  function getCurrentChatIndex(messages = getCurrentChatMessages()) {
+    const key = getCurrentChatId() + '|' + messages.length;
+    if (currentChatIndex && currentChatIndexKey === key) return currentChatIndex;
+    const index = new Map();
+    messages.forEach((message, mesId) => {
+      const snapshot = getCurrentMessageSnapshot(message);
+      const hash = computeTextHash(normalizeFavoriteText(snapshot.text || getMessageContentText(message) || ''));
+      if (hash) { const list = index.get(hash) || []; list.push(mesId); index.set(hash, list); }
+    });
+    currentChatIndexKey = key; currentChatIndex = index; return index;
+  }
+
   function resolveFavoriteTarget(item, messages = getCurrentChatMessages()) {
     if (!item || !Array.isArray(messages) || !messages.length) {
       return { mesId: item?.messageId ?? -1, message: null, status: 'missing' };
@@ -3287,19 +3622,28 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       return { mesId: exactId, message: exactMessage, status: 'exact' };
     }
 
+    const indexedIds = item.textHash ? getCurrentChatIndex(messages).get(item.textHash) : null;
+    if (indexedIds?.length) {
+      const mesId = indexedIds.reduce((best, id) => Math.abs(id - exactId) < Math.abs(best - exactId) ? id : best, indexedIds[0]);
+      return { mesId, message: messages[mesId], status: 'fallback' };
+    }
+
     const nearby = findFavoriteByRange(item, messages, exactId - 12, exactId + 12);
     if (nearby) return nearby;
 
     const full = findFavoriteByRange(item, messages, 0, messages.length - 1);
     if (full) return full;
 
-    return { mesId: exactId, message: exactMessage || null, status: 'missing' };
+    // 收藏属于当前聊天的 metadata；文本/分支被编辑后仍保留原楼层作为可用回退。
+    if (exactMessage) return { mesId: exactId, message: exactMessage, status: 'fallback' };
+    return { mesId: exactId, message: null, status: 'missing' };
   }
 
   function ensureFavoriteResolved(item, resolution) {
     if (!item || !resolution?.message) return resolution;
     if (resolution.status === 'missing') return resolution;
     const snapshot = resolveFavoriteMessageSnapshot(item, resolution.message);
+    if (!snapshot.matched) return resolution;
     if (item.messageId === resolution.mesId
       && resolution.status === 'exact'
       && normalizeFavoriteSwipeIndex(item.swipeIndex) === normalizeFavoriteSwipeIndex(snapshot.swipeIndex)) return resolution;
@@ -3343,10 +3687,11 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     return note ? `${prefix} · ${note}` : prefix;
   }
 
-  function getFavoriteListSummary(item) {
+  function getFavoriteListSummary(item, resolution = null) {
     const note = String(item?.note || '').trim();
     if (note) return note;
-    return item?.previewText ? item.previewText.slice(0, 60) : '无备注';
+    const resolvedPreview = item?.previewText || getCurrentMessageSnapshot(resolution?.message).text || '';
+    return resolvedPreview ? normalizeFavoriteText(resolvedPreview).slice(0, 60) : '无备注';
   }
 
   function getFavoriteResolvedSnapshot(item, resolution) {
@@ -3557,7 +3902,6 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     const winPos = captureWindowScroll();
     scrollMessageInChat(targetEl, 'start', 'smooth');
     restoreWindowScrollStable(winPos);
-    flashMessage(targetEl);
     return true;
   }
 
@@ -4563,7 +4907,15 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     clearQuickEditState();
 
     favoriteSyncSeq += 1;
-    refreshFavoritesFromMetadata();
+    try {
+      refreshFavoritesFromMetadata();
+    } catch (error) {
+      console.error('[STCJ] favorites-read failed', {
+        chatId: getCurrentChatId(),
+        reason,
+        error,
+      });
+    }
 
     const root = document.getElementById(ROOT_ID);
     if (root) updateFavoritesUI(root);
@@ -4575,39 +4927,78 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
   function attachChatChangeListeners() {
     try {
-      const ctx = window.SillyTavern?.getContext?.();
-      const es = ctx?.eventSource;
-      const et = ctx?.event_types;
-      if (!es || !et) return null;
+      const ctx = getHostContext();
+      const event = getHostEventTypes(ctx).CHAT_CHANGED;
+      if (!ctx?.eventSource || !event) {
+        console.warn('[STCJ] listener-bound', {
+          ok: false,
+          event: event || null,
+          chatId: getCurrentChatId(ctx),
+          reason: 'CHAT_CHANGED unavailable',
+        });
+        return null;
+      }
+      let handledChatId = getCurrentChatId(ctx);
+      const handler = async (eventChatId) => {
+        console.log('[STCJ] chat-event', {
+          event,
+          eventChatId: eventChatId == null ? null : String(eventChatId),
+          contextChatId: getCurrentChatId(),
+        });
+        const oldChatId = handledChatId;
+        rangeOperationSeq += 1;
+        rangeBusy = false;
+        flushPendingFavoriteSnapshot(oldChatId);
 
-      const handler = () => resetTempFavorites('event', { clearRange: true });
-
-      const keys = [
-        'CHAT_CHANGED',
-        'CHAT_LOADED',
-        'CHAT_SELECTED',
-        'OPEN_CHAT',
-        'SWITCH_CHAT',
-        'CHARACTER_CHANGED',
-        'CHARACTER_SELECTED',
-        'GROUP_CHANGED',
-        'GROUP_SELECTED',
-      ];
-
-      const events = keys.map((k) => et[k]).filter(Boolean);
-      const uniq = [...new Set(events)];
-      uniq.forEach((ev) => es.on?.(ev, handler));
-
-      return () => {
-        try {
-          uniq.forEach((ev) => es.removeListener?.(ev, handler));
-        } catch {
-          /* ignore */
-        }
+        // CHAT_CHANGED 的参数就是宿主加载后的聊天 ID；让同步监听器先完成，再读取新 metadata。
+        await Promise.resolve();
+        await sleep(0);
+        const contextChatId = getCurrentChatId();
+        const nextChatId = eventChatId == null ? contextChatId : String(eventChatId);
+        handledChatId = nextChatId || contextChatId;
+        const latestCtx = getHostContext();
+        lastChatKey = getChatKey();
+        lastChatRef = latestCtx?.chat || null;
+        lastChatMetadataRef = latestCtx?.chatMetadata || null;
+        lastChatLen = Array.isArray(latestCtx?.chat) ? latestCtx.chat.length : null;
+        invalidateChatIndex();
+        try { scheduleMessageVisibilityObserverReset(); }
+        catch (error) { console.warn('[STCJ] visibility-observer', { stage: 'chat-event', error }); }
+        // 可见楼层 observer 的任何异常都不得阻断收藏刷新。
+        resetTempFavorites('event', { clearRange: true });
+        console.log('[STCJ] favorites-read', {
+          source: 'chat-event',
+          chatId: handledChatId,
+          count: favoriteItems.length,
+        });
       };
-    } catch {
+      ctx.eventSource.on?.(event, handler);
+      console.log('[STCJ] listener-bound', {
+        ok: true,
+        event,
+        chatId: handledChatId,
+      });
+      return () => ctx.eventSource.removeListener?.(event, handler);
+    } catch (error) {
+      console.error('[STCJ] listener-bound', { ok: false, error });
       return null;
     }
+  }
+
+  function attachMessageInvalidationListeners() {
+    const ctx = getHostContext();
+    const eventTypes = getHostEventTypes(ctx);
+    const events = [
+      eventTypes.MESSAGE_RECEIVED,
+      eventTypes.MESSAGE_EDITED,
+      eventTypes.MESSAGE_UPDATED,
+      eventTypes.MESSAGE_DELETED,
+      eventTypes.MESSAGE_SWIPED,
+    ].filter(Boolean);
+    const uniqueEvents = [...new Set(events)];
+    const handler = () => invalidateChatIndex();
+    uniqueEvents.forEach((event) => ctx?.eventSource?.on?.(event, handler));
+    return () => uniqueEvents.forEach((event) => ctx?.eventSource?.removeListener?.(event, handler));
   }
 
   function startChatWatch() {
@@ -4617,10 +5008,12 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       const ctx = window.SillyTavern?.getContext?.();
       lastChatKey = getChatKey();
       lastChatRef = ctx?.chat || null;
+      lastChatMetadataRef = ctx?.chatMetadata || null;
       lastChatLen = Array.isArray(ctx?.chat) ? ctx.chat.length : null;
     } catch {
       lastChatKey = null;
       lastChatRef = null;
+      lastChatMetadataRef = null;
       lastChatLen = null;
     }
 
@@ -4631,30 +5024,38 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
         const key = getChatKey();
         const ref = ctx.chat || null;
+        const metadataRef = ctx.chatMetadata || null;
         const len = Array.isArray(ctx.chat) ? ctx.chat.length : null;
+        const identityChanged = !!(key && lastChatKey && key !== lastChatKey);
+        const metadataChanged = !!(metadataRef && lastChatMetadataRef && metadataRef !== lastChatMetadataRef);
+        const chatRefChanged = !!(ref && lastChatRef && ref !== lastChatRef);
 
-        // 1) 有 chatKey 时优先用 key 判断
-        if (key && lastChatKey && key !== lastChatKey) {
-          lastChatKey = key;
-          lastChatRef = ref;
+        if (identityChanged || metadataChanged || chatRefChanged) {
+          const reason = identityChanged ? 'key' : (metadataChanged ? 'metadata-ref' : 'chat-ref');
+          lastChatKey = key || lastChatKey;
+          lastChatRef = ref || lastChatRef;
+          lastChatMetadataRef = metadataRef || lastChatMetadataRef;
           lastChatLen = len;
-          resetTempFavorites('key', { clearRange: true });
+          invalidateChatIndex();
+          try { scheduleMessageVisibilityObserverReset(); }
+          catch (error) { console.warn('[STCJ] visibility-observer', { stage: 'fallback-change', error }); }
+          console.log('[STCJ] fallback-change', {
+            reason,
+            chatId: getCurrentChatId(ctx),
+          });
+          resetTempFavorites(reason, { clearRange: identityChanged || metadataChanged });
+          console.log('[STCJ] favorites-read', {
+            source: 'fallback-change',
+            chatId: getCurrentChatId(ctx),
+            count: favoriteItems.length,
+          });
           return;
         }
         if (!lastChatKey && key) lastChatKey = key;
-
-        // 2) 尝试用 chat 数组引用变化判断
-        if (ref && lastChatRef && ref !== lastChatRef) {
-          lastChatKey = key || lastChatKey;
-          lastChatRef = ref;
-          lastChatLen = len;
-          // chat 数组引用变化噪声较大（编辑/刷新时也可能变化），这里只清理收藏，不动区间视图
-          resetTempFavorites('ref', { clearRange: false });
-          return;
-        }
         if (!lastChatRef && ref) lastChatRef = ref;
+        if (!lastChatMetadataRef && metadataRef) lastChatMetadataRef = metadataRef;
 
-        // 3) 兜底：切换聊天时常会先清空 chat
+        // 极早期切换可能先把 chat 清空，此时也刷新一次。
         if (
           typeof len === 'number' &&
           typeof lastChatLen === 'number' &&
@@ -4664,8 +5065,10 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
         ) {
           lastChatKey = key || lastChatKey;
           lastChatRef = ref || lastChatRef;
+          lastChatMetadataRef = metadataRef || lastChatMetadataRef;
           lastChatLen = len;
-          resetTempFavorites('len', { clearRange: true });
+          console.log('[STCJ] fallback-change', { reason: 'chat-empty', chatId: getCurrentChatId(ctx) });
+          resetTempFavorites('chat-empty', { clearRange: true });
           return;
         }
 
@@ -5108,6 +5511,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     currentHead:       '.stcj-btn[data-action="currentHead"]',
     currentTail:       '.stcj-btn[data-action="currentTail"]',
     quickEdit:         '.stcj-btn[data-action="quickEdit"]',
+    quickDelete:       '.stcj-btn[data-action="quickDelete"]',
     pinGroup:          '.stcj-pin-group',
   };
 
@@ -5201,9 +5605,25 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     const container = document.getElementById('extensions_settings2');
     if (!container) {
-      log('未找到 #extensions_settings2，设置面板未挂载');
+      if (!settingsMountObserver && window.MutationObserver) {
+        settingsMountObserver = new MutationObserver(() => {
+          if (!document.getElementById('extensions_settings2')) return;
+          if (hostFlashSuppressTimer) {
+          clearTimeout(hostFlashSuppressTimer);
+          hostFlashSuppressTimer = null;
+        }
+        getChatContainer()?.classList.remove('stcj-suppress-host-flash');
+        settingsMountObserver?.disconnect();
+          settingsMountObserver = null;
+          mountSettingsPanel();
+        });
+        settingsMountObserver.observe(document.body, { childList: true, subtree: true });
+      }
+      log('未找到 #extensions_settings2，等待设置容器出现');
       return;
     }
+    settingsMountObserver?.disconnect();
+    settingsMountObserver = null;
 
     const html = `
       <div id="${PANEL_ID}" class="stcj-ext-settings">
@@ -5475,6 +5895,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">${ICONS.head}</div>
       <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">${ICONS.tail}</div>
       <div class="stcj-btn" data-action="quickEdit" title="快速编辑：选中文字可高亮定位；无选中则编辑当前楼层">${ICONS.pencil}</div>
+      <div class="stcj-btn" data-action="quickDelete" title="快速删除：选中某楼文字则删除该楼；无选中则删除最新楼层">${ICONS.trash}</div>
 
       <div class="stcj-pin-group">
         <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${ICONS.pin}</div>
@@ -5495,6 +5916,11 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
     document.body.appendChild(root);
 
+    // 尽早绑定聊天事件和轻量兜底，避免收藏初始化异常阻断后续刷新链路。
+    detachChatListeners = attachChatChangeListeners();
+    const detachMessageInvalidation = attachMessageInvalidationListeners();
+    startChatWatch();
+
     // 初始布局
     root.style.setProperty('--stcj-scale', String(normalizeRootScale(settings.scale)));
     root.classList.toggle('stcj-horizontal', settings.orientation === 'horizontal');
@@ -5504,7 +5930,20 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     updateCollapseToggleButton(root);
     updatePrevNextButtons(root);
     updateFavPanelToggleButton(root);
-    refreshFavoritesFromMetadata();
+    try {
+      refreshFavoritesFromMetadata();
+      console.log('[STCJ] favorites-read', {
+        source: 'initial',
+        chatId: getCurrentChatId(),
+        count: favoriteItems.length,
+      });
+    } catch (error) {
+      console.error('[STCJ] favorites-read', {
+        source: 'initial',
+        chatId: getCurrentChatId(),
+        error,
+      });
+    }
     updateFavoritesUI(root);
     updateRangeButtons(root);
     updateQuickEditButton(root);
@@ -5531,9 +5970,8 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     applyFavoritePanelSize(root);
     detachOutsideClose = bindRootOutsideClose(root);
 
-    // 监听聊天切换，切换到对应聊天文件的永久收藏
-    detachChatListeners = attachChatChangeListeners();
-    startChatWatch();
+    // 可见楼层观察器单独初始化；聊天监听已在收藏初始化前绑定。
+    ensureMessageVisibilityObservers();
 
     // 窗口尺寸变化时，保持相对位置（并保证不跑出屏幕）
     const onResize = () => scheduleRepositionOnResize(root);
@@ -5549,6 +5987,7 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
 
       try {
         detachChatListeners?.();
+        detachMessageInvalidation?.();
         detachChatListeners = null;
       } catch {
         /* ignore */
@@ -5631,7 +6070,16 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
       }
 
       try {
+        settingsMountObserver?.disconnect();
+        settingsMountObserver = null;
+        flushAllPendingFavoriteSnapshots();
+        resetMessageVisibilityObservers();
+        restoreHostStyles();
+        document.body.classList.remove(BODY_PIN_MODE_CLASS);
+        document.querySelectorAll('[data-stcj-settings], #stcj-settings-panel, .stcj-settings-panel').forEach((el) => el.remove());
         root.remove();
+        if (window.__ST_CHAT_JUMPER_INSTANCE__ === instance) window.__ST_CHAT_JUMPER_INSTANCE__ = null;
+        delete window[PLUGIN_NS + 'Cleanup'];
       } catch {
         /* ignore */
       }
@@ -5651,53 +6099,52 @@ import { messageFormatting as coreMessageFormatting } from '../../../../script.j
     log('UI 已注入');
   }
 
-  async function waitUntilReady() {
-    // 优先监听 APP_READY；否则轮询
-    try {
-      const ctx = window.SillyTavern?.getContext?.();
-      const es = ctx?.eventSource;
-      const et = ctx?.event_types;
-      if (es && et?.APP_READY) {
-        await new Promise((resolve) => {
-          const done = () => {
-            try {
-              es.removeListener?.(et.APP_READY, done);
-            } catch {
-              /* ignore */
-            }
-            resolve();
-          };
-          es.on(et.APP_READY, done);
-          setTimeout(done, 5000);
-        });
-        return;
-      }
-    } catch {
-      /* ignore */
-    }
-
-    // 兜底轮询
-    for (let i = 0; i < 60; i++) {
-      if (window.SillyTavern?.getContext && document.getElementById('chat')) return;
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(500);
-    }
+  function isActuallyReady() {
+    return !!(window.SillyTavern?.getContext?.()?.eventSource && document.getElementById('chat') && document.body);
   }
 
+  async function waitUntilReady() {
+    if (isActuallyReady()) return;
+    const ctx = getHostContext();
+    const event = getHostEventTypes(ctx).APP_READY;
+    if (ctx?.eventSource && event) {
+      await new Promise((resolve) => {
+        const done = () => { ctx.eventSource.removeListener?.(event, done); resolve(); };
+        ctx.eventSource.on?.(event, done);
+        setTimeout(done, 5000);
+      });
+      if (isActuallyReady()) return;
+    }
+    for (let i = 0; i < 60 && !isActuallyReady(); i++) await sleep(500);
+  }
+
+  let instanceDestroyed = false;
+
   async function init() {
+    if (instanceDestroyed) return;
     // 避免重复注入
     if (document.getElementById(ROOT_ID)) return;
 
     await waitUntilReady();
+    if (instanceDestroyed) return;
 
     // 如果依然没有聊天容器，则延迟再试
     if (!document.getElementById('chat')) {
-      setTimeout(init, 1000);
+      setTimeout(() => { if (!instanceDestroyed) void init(); }, 1000);
       return;
     }
 
     buildUI();
   }
 
-  init();
+  try { window.__ST_CHAT_JUMPER_INSTANCE__?.destroy?.(); } catch { /* ignore hot reload cleanup */ }
+  const instance = {
+    destroy: () => {
+      if (instanceDestroyed) return;
+      instanceDestroyed = true;
+      window[PLUGIN_NS + 'Cleanup']?.();
+    },
+  };
+  window.__ST_CHAT_JUMPER_INSTANCE__ = instance;
+  void init();
 })();

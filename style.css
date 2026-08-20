@@ -681,26 +681,12 @@
   }
 }
 
-/* 闪烁动画 */
-#chat .mes.stcj-flash {
-  position: relative;
-  z-index: 10;
-  box-shadow: 0 0 0 2px rgba(81, 207, 102, 0.6) inset;
-  border-radius: 6px;
-  animation: stcjFlash 1s ease-out;
+/* ST 的 /chat-jump 会添加 flash/animated；插件跳转期间仅屏蔽视觉动画。 */
+#chat.stcj-suppress-host-flash .mes.flash.animated {
+  animation: none !important;
+  box-shadow: none !important;
 }
 
-@keyframes stcjFlash {
-  0% {
-    box-shadow: 0 0 0 4px rgba(81, 207, 102, 0.8) inset;
-    background: rgba(81, 207, 102, 0.1);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 rgba(81, 207, 102, 0) inset;
-    background: transparent;
-  }
-}
 
 /* 点选收藏模式：鼠标在聊天消息上显示图钉光标 */
 body.stcj-pin-mode #chat .mes {
