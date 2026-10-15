@@ -1,0 +1,3 @@
+# Local TauriTavern CDP scripts and live-test results (not portable fixtures).
+# Keep generic *.test.cjs regression tests under version control.
+/tests/tt-*

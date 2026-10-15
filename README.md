@@ -1,6 +1,7 @@
 # ST Chat Jumper
 
 SillyTavern 悬浮跳转条插件，提供快捷楼层导航、快速编辑、翻页、楼层收藏等功能。
+> 已兼容TauriTavern（tt 酒馆）
 
 ## 功能
 

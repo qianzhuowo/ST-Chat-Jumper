@@ -581,6 +581,33 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     try { return window.SillyTavern?.getContext?.() || null; } catch { return null; }
   }
 
+  // 宿主弹窗位于 getContext()，不是 SillyTavern 顶层。WebView 中不依赖原生对话框。
+  async function showHostDialog(type, text, initialValue = '') {
+    const ctx = getHostContext();
+    try {
+      if (typeof ctx?.callGenericPopup === 'function' && ctx?.POPUP_TYPE?.[type] != null) {
+        const content = document.createElement('div');
+        content.style.whiteSpace = 'pre-wrap';
+        content.textContent = text; // 备注等用户文本不能作为弹窗 HTML 解析。
+        const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE[type], initialValue);
+        return type === 'INPUT'
+          ? (typeof result === 'string' ? result : null)
+          : (result === true || result === (ctx.POPUP_RESULT?.AFFIRMATIVE ?? 1));
+      }
+      if (window.__TAURITAVERN__) throw new Error('宿主未提供可用的弹窗 API');
+      // 仅供缺少 Popup API 的旧版浏览器酒馆使用。
+      return type === 'INPUT' ? window.prompt(text, initialValue) : window.confirm(text);
+    } catch (error) {
+      log('宿主弹窗失败', error);
+      toastError('无法打开宿主对话框，操作已取消。');
+      return type === 'INPUT' ? null : false;
+    }
+  }
+
+  function isHostManagedChatView() {
+    return window.__TAURITAVERN__?.api?.chatSurface?.isManagedOwnershipRequired?.() === true;
+  }
+
   function getHostEventTypes(ctx = getHostContext()) {
     return { ...(ctx?.event_types || {}), ...(ctx?.eventTypes || {}) };
   }
@@ -764,9 +791,9 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
    * 只滚动聊天滚动容器，不使用 scrollIntoView（它可能会连带滚动 window）。
    * @param {HTMLElement} mesEl
    * @param {'start'|'end'} block
-   * @param {'auto'|'smooth'} behavior
+   * @param {'auto'|'instant'|'smooth'} behavior
    */
-  function scrollMessageInChat(mesEl, block, behavior = 'smooth') {
+  function scrollMessageInChat(mesEl, block, behavior = 'instant') {
     const scrollEl = getChatScrollElement();
     if (!mesEl || !scrollEl) return false;
 
@@ -782,7 +809,8 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
       targetTop = clamp(targetTop, 0, max);
 
       if (typeof scrollEl.scrollTo === 'function') {
-        scrollEl.scrollTo({ top: targetTop, behavior });
+        // auto 会继承宿主 CSS 的 scroll-behavior，不能保证没有动画。
+        scrollEl.scrollTo({ top: targetTop, behavior: behavior === 'auto' ? 'instant' : behavior });
       } else {
         scrollEl.scrollTop = targetTop;
       }
@@ -1070,13 +1098,13 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
 
     // 兜底：滚动到顶部/底部
     if (targetId <= 0) {
-      scrollEl.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollEl.scrollTo({ top: 0, behavior: 'instant' });
       restoreWindowScrollStable(winPos);
       return true;
     }
 
     if (targetId >= lastId) {
-      scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+      scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
       restoreWindowScrollStable(winPos);
       return true;
     }
@@ -2183,19 +2211,8 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
       ? `${activeRange.start}-${activeRange.end}`
       : `${Math.max(0, maxId)}`;
 
-    let value = null;
-
-    try {
-      if (typeof window.SillyTavern?.callGenericPopup === 'function') {
-        value = await window.SillyTavern.callGenericPopup(tip, window.SillyTavern?.POPUP_TYPE?.INPUT);
-      }
-    } catch {
-      value = null;
-    }
-
-    if (typeof value !== 'string') {
-      value = window.prompt(tip, defaultValue);
-    }
+    if (isHostManagedChatView()) tip += '\n当前 tt 虚拟滚动模式仅支持单楼跳转；区间显示需关闭宿主虚拟滚动并重载。';
+    const value = await showHostDialog('INPUT', tip, defaultValue);
 
     if (typeof value !== 'string') return null;
     return value.trim();
@@ -2225,6 +2242,13 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     const range = parseRangeInput(input, maxId);
     if (!range) {
       toastError(`输入无效（请输入 0-${maxId} 范围内的楼层号或区间如 a-b）。`);
+      return false;
+    }
+
+    if (chatId !== getCurrentChatId() || operationSeq !== rangeOperationSeq) return false;
+    if (isHostManagedChatView()) {
+      if (typeof range.jumpTo === 'number') return jumpToMessage(range.jumpTo, 'start');
+      toastWarn('tt 虚拟滚动模式不支持插件重绘区间。请关闭宿主虚拟滚动并重载，或输入单个楼层号跳转。');
       return false;
     }
 
@@ -2325,6 +2349,10 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
    * 步长 = 用户自定义的 rangeStep（默认 10），模式 = 用户设置。
    */
   async function shiftFloorRangeImpl(direction) {
+    if (isHostManagedChatView()) {
+      toastWarn('tt 虚拟滚动模式不支持区间翻页，请使用楼层跳转。');
+      return false;
+    }
     if (!activeRange) {
       toastWarn('当前没有激活的楼层区间。');
       return false;
@@ -3073,7 +3101,11 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     const liveText = message
       ? String(getCurrentMessageSnapshot(message).text || getMessageContentText(message) || '')
       : '';
-    const originalText = liveText || String(item.previewText || snapshot?.text || '');
+    // 收藏指向具体分支，不能用当前显示分支覆盖收藏快照。
+    // 分支已改动/不存在时保留收藏摘要，不冒充另一分支的完整正文。
+    const originalText = snapshot?.matched
+      ? String(snapshot.text || '')
+      : String(item.previewText || liveText || snapshot?.text || '');
     const originalReasoning = resolution.status === 'missing' || !snapshot
       ? ''
       : String(snapshot.reasoning || '');
@@ -3514,6 +3546,32 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     favoritesSaveTimer = setTimeout(() => { favoritesSaveTimer = null; flushPendingFavoriteSnapshot(chatId); }, FAVORITES_SAVE_DEBOUNCE);
   }
 
+  async function saveExplicitFavoriteChange() {
+    // 用户主动写操作不能走双重 debounce：tt 重载/切换聊天会取消宿主待保存任务。
+    const ctx = getHostContext();
+    const chatId = getCurrentChatId(ctx);
+    if (!chatId || !ctx?.chatMetadata) return false;
+    if (favoritesSaveTimer) { clearTimeout(favoritesSaveTimer); favoritesSaveTimer = null; }
+    pendingFavoriteSnapshots.delete(chatId);
+    const metadata = ctx.chatMetadata;
+    try {
+      if (typeof ctx.saveMetadata === 'function') {
+        await ctx.saveMetadata();
+      } else if (typeof ctx.saveMetadataDebounced === 'function') {
+        ctx.saveMetadataDebounced();
+      } else {
+        throw new Error('宿主缺少聊天元数据保存接口');
+      }
+      return true;
+    } catch (error) {
+      log('收藏保存失败', error);
+      toastError('收藏更改尚未保存，请勿切换聊天；稍后重试。');
+      return false;
+    } finally {
+      if (getHostContext()?.chatMetadata === metadata) touchFavoritesUI();
+    }
+  }
+
   function touchFavoritesUI() {
     const root = document.getElementById(ROOT_ID);
     if (root) updateFavoritesUI(root);
@@ -3808,9 +3866,7 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
 
     favoriteItems.unshift(candidate);
     syncFavoriteItemsToMetadata();
-    scheduleFavoritesSave();
-    touchFavoritesUI();
-    return true;
+    return saveExplicitFavoriteChange();
   }
 
   function removeFavoriteById(favoriteId) {
@@ -3819,9 +3875,7 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     favoriteItems.splice(index, 1);
     if (favoriteQuickMenuId === favoriteId) favoriteQuickMenuId = null;
     syncFavoriteItemsToMetadata();
-    scheduleFavoritesSave();
-    touchFavoritesUI();
-    return true;
+    return saveExplicitFavoriteChange();
   }
 
   function updateFavoriteNoteById(favoriteId, nextNote) {
@@ -3830,48 +3884,26 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     item.note = String(nextNote || '');
     item.updatedAt = Date.now();
     syncFavoriteItemsToMetadata();
-    scheduleFavoritesSave();
-    touchFavoritesUI();
-    return true;
+    return saveExplicitFavoriteChange();
   }
 
   async function promptFavoriteNote(initialValue = '') {
-    const tip = '编辑收藏备注';
-    let value = null;
-    try {
-      if (typeof window.SillyTavern?.callGenericPopup === 'function') {
-        value = await window.SillyTavern.callGenericPopup(tip, window.SillyTavern?.POPUP_TYPE?.INPUT, String(initialValue || ''));
-      }
-    } catch {
-      value = null;
-    }
-    if (typeof value !== 'string') {
-      value = window.prompt(tip, String(initialValue || ''));
-    }
-    return typeof value === 'string' ? value : null;
+    return showHostDialog('INPUT', '编辑收藏备注', String(initialValue || ''));
   }
 
   async function confirmFavoriteDelete(item) {
     const label = getFavoriteQuickLabel(item, { mesId: item.messageId });
     const tip = `确认删除收藏：${label} ？`;
-    let result = null;
-    try {
-      if (typeof window.SillyTavern?.callGenericPopup === 'function') {
-        result = await window.SillyTavern.callGenericPopup(tip, window.SillyTavern?.POPUP_TYPE?.CONFIRM);
-      }
-    } catch {
-      result = null;
-    }
-    if (typeof result === 'boolean') return result;
-    return window.confirm(tip);
+    return showHostDialog('CONFIRM', tip);
   }
 
   async function editFavoriteNoteById(favoriteId) {
     const item = getFavoriteItemById(favoriteId);
     if (!item) return false;
+    const metadata = getHostContext()?.chatMetadata;
     const value = await promptFavoriteNote(item.note || '');
-    if (value == null) return false;
-    updateFavoriteNoteById(favoriteId, value);
+    if (value == null || metadata !== getHostContext()?.chatMetadata) return false;
+    if (!await updateFavoriteNoteById(favoriteId, value)) return false;
     toastSuccess(value ? '收藏备注已更新。' : '已清空收藏备注。');
     return true;
   }
@@ -3879,9 +3911,10 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
   async function deleteFavoriteByIdWithConfirm(favoriteId) {
     const item = getFavoriteItemById(favoriteId);
     if (!item) return false;
+    const metadata = getHostContext()?.chatMetadata;
     const confirmed = await confirmFavoriteDelete(item);
-    if (!confirmed) return false;
-    const removed = removeFavoriteById(favoriteId);
+    if (!confirmed || metadata !== getHostContext()?.chatMetadata) return false;
+    const removed = await removeFavoriteById(favoriteId);
     if (removed) toastInfo('收藏已删除。');
     return removed;
   }
@@ -3900,7 +3933,7 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
 
     const targetEl = document.querySelector(`#chat .mes[mesid="${resolution.mesId}"]`) || existingEl;
     const winPos = captureWindowScroll();
-    scrollMessageInChat(targetEl, 'start', 'smooth');
+    scrollMessageInChat(targetEl, 'start', 'instant');
     restoreWindowScrollStable(winPos);
     return true;
   }
@@ -4502,6 +4535,26 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     }
 
     const activeEntry = detailEntries.find((entry) => entry.item.id === favoritesModalActiveId) || detailEntries[0];
+    const previewMessage = activeEntry?.resolution?.message;
+    if (window.__TAURITAVERN__ && previewMessage?.tt_swipe_cold) {
+      const metadata = getHostContext()?.chatMetadata;
+      const isCurrentRender = () => renderSeq === favoritesRenderSeq
+        && favoritesModalOpen && getHostContext()?.chatMetadata === metadata;
+      try {
+        // tt 的 transport 暴露宿主原生水合逻辑：仅补齐当前预览楼层的空槽，
+        // 保留实时分支内容、swipe_id 与冷源寿命。原版 ST 不加载此模块。
+        const { hydrateMessageSwipes } = await import('../../../chat-payload-transport.js');
+        if (!isCurrentRender()) return;
+        await hydrateMessageSwipes(previewMessage);
+        if (!isCurrentRender()) return;
+        activeEntry.resolution = ensureFavoriteResolved(activeEntry.item, resolveFavoriteTarget(activeEntry.item));
+      } catch (error) {
+        if (!isCurrentRender()) return;
+        log('收藏历史分支加载失败', error);
+        if (mainList) mainList.textContent = '历史分支尚未加载，无法显示完整预览。请重新打开收藏重试。';
+        return;
+      }
+    }
     if (activeEntry && headRefs.title) {
       const activeSnapshot = getFavoriteResolvedSnapshot(activeEntry.item, activeEntry.resolution);
       const activeFloor = activeEntry.resolution.status === 'missing' ? '未定位楼层' : formatFloorLabel(activeEntry.resolution.mesId);
@@ -4781,7 +4834,7 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     pinDown = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
   }
 
-  function onPinPointerUp(e) {
+  async function onPinPointerUp(e) {
     if (!pinMode) return;
 
     if (pinDown && pinDown.pointerId !== e.pointerId) return;
@@ -4808,11 +4861,10 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
     e.stopPropagation();
     e.stopImmediatePropagation?.();
 
-    const added = addFavorite(mesId);
+    const saved = addFavorite(mesId);
     if (root) updateFavoritesUI(root);
 
-    if (added) toastSuccess(`已收藏：${formatFloorLabel(mesId)}`);
-
+    // 在等待保存前结束点选并拦截 click，避免异步 I/O 期间重复收藏。
     // 阻止本次点击（click 事件）继续触发酒馆自身逻辑
     suppressNextChatClick = true;
     setTimeout(() => {
@@ -4821,6 +4873,7 @@ import { SWIPE_DIRECTION } from '../../../constants.js';
 
     // 一次点选后自动退出点选模式，但保留收藏面板
     setPinMode(false);
+    if (await saved) toastSuccess(`已收藏：${formatFloorLabel(mesId)}`);
   }
 
   function onPinClickCapture(e) {
