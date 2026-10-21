@@ -105,3 +105,12 @@ SillyTavern/public/scripts/extensions/third-party/
 - 新增快速编辑功能（选中文字高亮定位）
 - 新增楼层区间显示与跳转
 - 新增临时收藏楼层列表
+
+
+
+## 开发与模块扩展
+
+入口 `index.js` 只负责原生 ES Modules 启动，功能代码位于 `src/`，无需构建或安装运行时依赖。设置、宿主适配、导航/区间、编辑/删除、收藏、UI 与生命周期均有独立模块；存储格式、DOM 和现有宿主兼容契约保持不变。
+
+- [模块边界、状态所有权与扩展指南](docs/modules.md)
+- 运行回归与模块集成测试：`npm test`（或 `node --test tests/*.test.cjs`）

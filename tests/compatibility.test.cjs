@@ -1,17 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const { ready, createHarness } = require('./module-harness.cjs');
+test.before(() => ready);
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-// Execute the production functions in isolation, without bootstrapping the toolbar DOM.
-function section(start, end) {
-    const from = source.indexOf(start);
-    const to = source.indexOf(end, from);
-    if (from < 0 || to < 0) throw new Error(`Missing test boundary: ${start}`);
-    return source.slice(from, to);
-}
 function harness(result, { managed = false, tt = true } = {}) {
     const calls = { native: 0, popup: 0, removed: 0, notes: 0, domWrites: 0, jumps: [] };
     const host = {
@@ -23,7 +14,7 @@ function harness(result, { managed = false, tt = true } = {}) {
             return typeof result === 'function' ? result() : result;
         },
     };
-    const context = vm.createContext({
+    const context = createHarness({
         window: {
             SillyTavern: { getContext: () => host },
             __TAURITAVERN__: tt ? { api: { chatSurface: { isManagedOwnershipRequired: () => managed } } } : undefined,
@@ -43,12 +34,7 @@ function harness(result, { managed = false, tt = true } = {}) {
         parseRangeInput: (input) => input.includes('-') ? { start: 0, end: 1 } : { start: 0, end: 1, jumpTo: Number(input) },
         jumpToMessage: async (id, block) => { calls.jumps.push([id, block]); return true; },
     });
-    vm.runInContext([
-        section('  function getHostContext()', '  function getCurrentChatId('),
-        section('  async function promptFavoriteNote(', '  async function jumpToFavoriteItemFromRecentList('),
-        'let rangeOperationSeq = 0;',
-        section('  async function showFloorRangeImpl(', '  async function restoreDefaultRangeView('),
-    ].join('\n'), context);
+
     return { context, host, calls };
 }
 
@@ -108,8 +94,8 @@ test('static hosts retain interval rendering', async () => {
     assert.equal(await context.showFloorRangeImpl('0-1'), true);
     assert.equal(calls.domWrites, 1);
     assert.deepEqual(rendered, [0, 1]);
-    assert.equal(calls.range.start, 0);
-    assert.equal(calls.range.end, 1);
+    assert.equal(context.state.range.activeRange.start, 0);
+    assert.equal(context.state.range.activeRange.end, 1);
 });
 test('managed interval requests leave the host DOM unchanged', async () => {
     const { context, calls } = harness(1, { managed: true });
@@ -143,16 +129,17 @@ test('explicit save bypasses debounce and cancels its pending stale snapshot', a
         saveMetadata: () => { writes.push('immediate'); return new Promise(resolve => { release = resolve; }); },
         saveMetadataDebounced: () => writes.push('debounced'),
     };
-    const context = vm.createContext({
+    const context = createHarness({
         getHostContext: () => host, getCurrentChatId: () => 'chat',
         clearTimeout: () => writes.push('cancel-timer'),
-        touchFavoritesUI: () => writes.push('refresh'), log() {}, toastError() {},
+        document: { getElementById: () => ({}) },
+        updateFavoritesUI: () => writes.push('refresh'), log() {}, toastError() {},
     });
-    vm.runInContext('let favoritesSaveTimer = 123; const pendingFavoriteSnapshots = new Map([["chat", {}]]);\n'
-        + section('  async function saveExplicitFavoriteChange()', '  function touchFavoritesUI()'), context);
+    context.state.favorites.favoritesSaveTimer = 123;
+    context.state.favorites.pendingFavoriteSnapshots.set('chat', {});
     const operation = context.saveExplicitFavoriteChange();
     assert.deepEqual(writes, ['cancel-timer', 'immediate']);
-    assert.equal(vm.runInContext('pendingFavoriteSnapshots.size', context), 0);
+    assert.equal(context.state.favorites.pendingFavoriteSnapshots.size, 0);
     release();
     assert.equal(await operation, true);
     assert.deepEqual(writes, ['cancel-timer', 'immediate', 'refresh']);
@@ -169,7 +156,7 @@ test('failed persistence does not report successful deletion', async () => {
 
 for (const matched of [true, false]) {
     test(`favorite preview uses ${matched ? 'matched saved swipe' : 'saved summary'} instead of current swipe`, async () => {
-        const context = vm.createContext({
+        const context = createHarness({
             resolveFavoriteMessageSnapshot: () => ({ matched, text: 'saved branch A full text', swipeIndex: 0 }),
             getCurrentMessageSnapshot: () => ({ text: 'currently displayed branch B' }),
             getMessageContentText: () => 'currently displayed branch B',
@@ -180,7 +167,7 @@ for (const matched of [true, false]) {
             decorateFavoriteInlineSemantics: text => text,
             sanitizeFavoriteOutput: text => text,
         });
-        vm.runInContext(section('  async function prepareFavoritePreviewPayload(', '  function buildFavoriteReasoningBlock('), context);
+
         const payload = await context.prepareFavoritePreviewPayload(
             { previewText: 'saved branch A summary', swipeIndex: 0 },
             { status: 'exact', mesId: 70, message: { mes: 'currently displayed branch B', swipe_id: 1 } },
@@ -195,12 +182,12 @@ for (const switchChat of [false, true]) {
         let rejectSave;
         const calls = [];
         const host = { chatMetadata: {}, saveMetadata: () => new Promise((_, reject) => { rejectSave = reject; }) };
-        const context = vm.createContext({
+        const context = createHarness({
             getHostContext: () => host, getCurrentChatId: () => 'chat', clearTimeout() {},
-            touchFavoritesUI: () => calls.push('refresh'), log() {}, toastError: text => calls.push(text),
+            document: { getElementById: () => ({}) },
+            updateFavoritesUI: () => calls.push('refresh'), log() {}, toastError: text => calls.push(text),
         });
-        vm.runInContext('let favoritesSaveTimer = null; const pendingFavoriteSnapshots = new Map();\n'
-            + section('  async function saveExplicitFavoriteChange()', '  function touchFavoritesUI()'), context);
+
         const operation = context.saveExplicitFavoriteChange();
         if (switchChat) host.chatMetadata = {};
         rejectSave(new Error('disk error'));

@@ -1,15 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8').replace(/\r\n/g, '\n');
-function section(start, end) {
-    const from = source.indexOf(start);
-    const to = source.indexOf(end, from);
-    assert.ok(from >= 0 && to > from, `Missing function boundary: ${start}`);
-    return source.slice(from, to);
-}
+const { ready, createHarness } = require('./module-harness.cjs');
+test.before(() => ready);
+
 function harness() {
     const calls = { scroll: [], ranges: [], loads: [] };
     const target = { getBoundingClientRect: () => ({ top: 800, bottom: 1100 }) };
@@ -18,7 +11,7 @@ function harness() {
         getBoundingClientRect: () => ({ top: 50, bottom: 550 }),
         scrollTo: options => calls.scroll.push(options),
     };
-    const context = vm.createContext({
+    const context = createHarness({
         document: { querySelector: () => target },
         getChatContainer: () => ({}), getChatScrollElement: () => scroll,
         getMessageElement: () => target, getLastMessageId: () => 50,
@@ -27,15 +20,11 @@ function harness() {
         resolveFavoriteTarget: () => ({ mesId: 20, message: {}, status: 'exact' }),
         ensureFavoriteResolved: (_, resolution) => resolution,
         showFloorRange: async range => { calls.ranges.push(range); return true; },
-        trySlashChatJump: async id => { calls.loads.push(id); },
-        waitForMessageElement: async () => target,
+        executeChatJump: async id => { calls.loads.push(id); },
+        waitForDom: async () => target,
         log() {}, toastWarn() {},
     });
-    vm.runInContext([
-        section('  function scrollMessageInChat(', '  function getLastMessageId('),
-        section('  async function jumpToMessage(', '  // =====================\n  // 快速编辑'),
-        section('  async function jumpToFavoriteItemFromRecentList(', '  function removeFavoriteQuickMenuOverlay('),
-    ].join('\n'), context);
+
     return { context, calls, target, scroll };
 }
 for (const behavior of [undefined, 'auto', 'instant']) {
@@ -70,7 +59,7 @@ for (const id of [0, 50]) {
     test(`boundary fallback ${id} does not animate`, async () => {
         const { context, calls } = harness();
         context.getMessageElement = () => null;
-        context.waitForMessageElement = async () => null;
+        context.waitForDom = async () => null;
         assert.equal(await context.jumpToMessage(id, 'start'), true);
         assert.equal(calls.scroll[0].behavior, 'instant');
         assert.equal(calls.scroll[0].top, id === 0 ? 0 : 3000);

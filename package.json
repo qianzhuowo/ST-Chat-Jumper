@@ -1,0 +1,8 @@
+{
+  "name": "st-chat-jumper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
+  }
+}

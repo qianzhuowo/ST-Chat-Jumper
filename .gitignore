@@ -1,3 +1,52 @@
-# Local TauriTavern CDP scripts and live-test results (not portable fixtures).
-# Keep generic *.test.cjs regression tests under version control.
+# Dependencies and package-manager caches (keep package manifests/lockfiles).
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/install-state.gz
+.pnp.*
+
+# Generated builds and tool caches. Native ESM source in src/ must be tracked.
+/dist/
+/build/
+/out/
+.cache/
+.parcel-cache/
+.vite/
+.eslintcache
+*.tsbuildinfo
+
+# Test/coverage output.
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+/tests/*-results.json
+/tests/*-test-output.txt
+/tests/*-validation.md
+
+# Local host-specific CDP/smoke tools, not portable regression tests.
 /tests/tt-*
+/tests/runtime-smoke.cjs
+# Keep tests/*.test.cjs and tests/module-harness.cjs under version control.
+
+# Local logs, temporary files and machine-specific configuration.
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.env
+.env.*
+!.env.example
+!.env.sample
+/.tmp/
+/tmp/
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
