@@ -3,6 +3,7 @@ import * as constants from './constants.js';
 // Explicit cross-feature service contract; linked once by application.js.
 export const requiredServices = [
   "clearQuickEditState",
+  "cancelRadial",
   "closeFavoriteQuickMenu",
   "flushPendingFavoriteSnapshot",
   "getCurrentChatId",
@@ -52,6 +53,7 @@ export function createFeature({ state, dependencies }) {
   }
 
   function resetTempFavorites(reason, options) {
+    dependencies.cancelRadial();
     const clearRange = !!options?.clearRange;
 
     dependencies.setPinMode(false);
@@ -94,6 +96,7 @@ export function createFeature({ state, dependencies }) {
       }
       let handledChatId = dependencies.getCurrentChatId(ctx);
       const handler = async (eventChatId) => {
+        dependencies.cancelRadial();
         console.log('[STCJ] chat-event', {
           event,
           eventChatId: eventChatId == null ? null : String(eventChatId),

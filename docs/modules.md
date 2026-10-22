@@ -99,3 +99,15 @@ node tests/runtime-smoke.cjs 9224 tests/module-st-results.json
 ```
 
 它需要可用的 CDP 页面与已就绪的酒馆。tt 模式用 CDP Fetch 在内存中提供工作区 JS，结束后撤销拦截并重载已部署页面，不改宿主文件/扩展安装目录；该模式不是 tt 磁盘部署路径测试。ST 模式在本地真实 HTTP 静态服务器加载原生模块，使用现有本机 Basic Auth 配置但不把凭据写入报告，结束后关闭仅本次启动的独立 headless 浏览器。测试只挂载 UI、打开收藏管理器和重载/销毁，不执行真实聊天编辑、删除或元数据保存。结果文件中的时间戳用于区分本次结果和历史 `tt-*-results.json`。
+
+
+## 手势轮盘与独立设置
+
+轮盘新增 `radial-config`、`action-registry`、`radial`、`radial-settings` feature；仍使用 `createFeature` 与 `requiredServices`，不引入构建依赖或全局服务查找器。几何/归一化纯函数与实例服务同模块导出，旧测试工厂枚举保持兼容。`toolbar.buildUI` 安装手势，`lifecycle` 销毁手势与 dialog，`chat-lifecycle` 在聊天切换时取消待执行轮盘。`settings-ui` 扩展设置入口只打开独立原生 dialog。
+
+动作 provider 仅经 `registerShortcutAction` 注册，轮盘调用分发服务，不依赖可见悬浮条按钮。[完整契约与参数说明](radial-menu.md)。
+
+
+### v2 可视化设置与渲染边界
+
+`radial-view.js` 提供原创极坐标扇区几何、共享菜单视图和有效内径计算，设置预览与真实轮盘使用同一实现。`radial-config.js` 管理 v1→v2 迁移、配色 / 每菜单覆盖 / 命名方案归一化；主菜单覆盖提升到唯一全局外观，子菜单可继承或独立。`radial-settings.js` 管理六分区内的配置编辑、方案快照及安全 JSON 导入，其 ResizeObserver 由 `destroyRadialSettings` 清理。设置外观样式在独立原创 `radial.css`，从 `style.css` 顶部导入；TT 内存验证需同时拦截该资源。

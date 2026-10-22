@@ -1,0 +1,98 @@
+import { EXT_SETTINGS_KEY } from './constants.js';
+
+export const requiredServices = [];
+const number = (value, fallback, min, max) => typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
+const bool = (value, fallback) => typeof value === 'boolean' ? value : fallback;
+export const RADIAL_THEMES = {
+  graphite: { label: '石墨深色', surface: '#252d3b', highlight: '#345b86', text: '#eef4ff', border: '#546174', accent: '#80b8ff', center: '#18202d' },
+  porcelain: { label: '瓷白', surface: '#f6f8fb', highlight: '#d9e8ff', text: '#25354c', border: '#c9d2dd', accent: '#356ee5', center: '#e7edf4' },
+  glacier: { label: '冰川蓝', surface: '#e3f4fa', highlight: '#afdbea', text: '#244756', border: '#a0c3d0', accent: '#197d9e', center: '#cce8f1' },
+  forest: { label: '苔绿', surface: '#e7eee4', highlight: '#bbd8b6', text: '#314b3a', border: '#a7b9a4', accent: '#427955', center: '#d3e2cd' },
+};
+export function defaultRadialAppearance(theme = 'graphite') {
+  const id = typeof theme === 'string' && Object.prototype.hasOwnProperty.call(RADIAL_THEMES, theme) ? theme : 'graphite';
+  const palette = RADIAL_THEMES[id];
+  return { ...palette, theme: id, shape: 'ring', gap: 3, innerRatio: 46, rotation: 0, fontSize: 12, scale: 100, opacity: 96, glow: 14, showLabels: true, showIcons: true, centerSymbol: '×' };
+}
+export function normalizeRadialAppearance(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const result = defaultRadialAppearance(r.theme);
+  for (const key of ['surface', 'highlight', 'text', 'border', 'accent', 'center']) if (typeof r[key] === 'string' && /^#[0-9a-f]{6}$/i.test(r[key])) result[key] = r[key];
+  result.shape = ['ring', 'petals', 'solid'].includes(r.shape) ? r.shape : result.shape;
+  for (const [key, min, max] of [['gap', 0, 16], ['innerRatio', 25, 65], ['rotation', -180, 180], ['fontSize', 10, 20], ['scale', 70, 130], ['opacity', 45, 100], ['glow', 0, 30]]) result[key] = number(r[key], result[key], min, max);
+  for (const key of ['showLabels', 'showIcons']) result[key] = bool(r[key], result[key]);
+  if (!result.showLabels && !result.showIcons) result.showLabels = true;
+  if (typeof r.centerSymbol === 'string') result.centerSymbol = [...r.centerSymbol].slice(0, 3).join('') || '×';
+  return result;
+}
+const slot = (id, label) => ({ label, action: { type: 'plugin', id } });
+export function defaultRadialConfig() {
+  return {
+    version: 2, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
+    keyboardEnabled: true, key: 'j', keyModifier: 'alt', touchMode: 'off', scope: 'chat',
+    threshold: 24, longPress: 550, tapCount: 2, tapInterval: 320, radius: 120,
+    deadZone: 28, cancelDistance: 240, submenuDelay: 400,
+    menus: [{ id: 'main', label: '主轮盘', items: [slot('prev', '上一楼'), slot('next', '下一楼'), slot('recent1', '最新楼'), slot('quickEdit', '快速编辑'), slot('showRange', '跳转/区间'), { label: '收藏', submenu: 'favorites' }] },
+      { id: 'favorites', label: '收藏', items: [slot('togglePin', '点选收藏'), slot('toggleFavPanel', '最近收藏'), slot('openFavoritesManager', '收藏管理')] }],
+  };
+}
+export function normalizeRadialConfig(raw) {
+  const d = defaultRadialConfig();
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const result = { ...d, appearance: normalizeRadialAppearance(r.appearance) };
+  for (const key of ['enabled', 'mouseEnabled', 'keyboardEnabled']) result[key] = bool(r[key], d[key]);
+  for (const [key, values] of Object.entries({ panelTheme: ['host', 'light', 'dark'], modifier: ['alt', 'ctrl', 'shift', 'none'], keyModifier: ['alt', 'ctrl', 'shift'], touchMode: ['off', 'longPress', 'multiTap'], scope: ['chat', 'page'] })) {
+    result[key] = values.includes(r[key]) ? r[key] : d[key];
+  }
+  result.mouseButton = [1, 2, 3, 4].includes(r.mouseButton) ? r.mouseButton : d.mouseButton;
+  result.key = typeof r.key === 'string' && /^[a-z0-9]$/i.test(r.key) ? r.key.toLowerCase() : d.key;
+  for (const [key, min, max] of [['threshold', 8, 100], ['longPress', 300, 1500], ['tapCount', 2, 4], ['tapInterval', 150, 700], ['radius', 80, 200], ['deadZone', 16, 60], ['cancelDistance', 160, 500], ['submenuDelay', 200, 1500]]) result[key] = number(r[key], d[key], min, max);
+  result.cancelDistance = Math.max(result.radius + 40, result.cancelDistance);
+  const menus = Array.isArray(r.menus) ? r.menus.slice(0, 17) : d.menus;
+  const ids = new Set();
+  result.menus = menus.filter(m => m && typeof m.id === 'string' && /^[\w-]{1,40}$/.test(m.id) && !ids.has(m.id) && ids.add(m.id)).map(m => ({
+    id: m.id, label: String(m.label || m.id).slice(0, 40), appearance: m.appearance ? normalizeRadialAppearance(m.appearance) : null,
+    items: (Array.isArray(m.items) ? m.items : []).slice(0, 12).map(item => {
+      const i = item && typeof item === 'object' ? item : {};
+      const s = { label: String(i.label || '未设置').slice(0, 40) };
+      if (typeof i.icon === 'string') s.icon = [...i.icon].slice(0, 4).join('');
+      if (typeof i.color === 'string' && /^#[0-9a-f]{6}$/i.test(i.color)) s.color = i.color;
+      if (typeof i.submenu === 'string') s.submenu = i.submenu.slice(0, 40);
+      else if (i.action && typeof i.action.type === 'string' && typeof i.action.id === 'string') s.action = { type: i.action.type.slice(0, 40), id: i.action.id.slice(0, 100) };
+      return s;
+    }),
+  }));
+  if (!result.menus.some(m => m.id === 'main')) result.menus.unshift(d.menus[0]);
+  result.menus = result.menus.slice(0, 17);
+  const main = result.menus.find(m => m.id === 'main');
+  if (main.appearance) { result.appearance = main.appearance; main.appearance = null; }
+  // Exactly two levels: child menus cannot recurse or invoke other menus.
+  for (const m of result.menus) for (const i of m.items) if (i.submenu && (m.id !== 'main' || i.submenu === 'main' || !result.menus.some(child => child.id === i.submenu))) delete i.submenu;
+  const schemes = Array.isArray(r.schemes) ? r.schemes.slice(0, 8) : [];
+  const schemeIds = new Set();
+  result.schemes = schemes.filter(s => s && typeof s.id === 'string' && /^[\w-]{1,40}$/.test(s.id) && !schemeIds.has(s.id) && schemeIds.add(s.id)).map(s => {
+    const normalized = normalizeRadialConfig({ menus: s.menus, appearance: s.appearance, radius: s.radius, schemes: [] });
+    return { id: s.id, label: String(s.label || '自定义方案').slice(0, 40), menus: normalized.menus, appearance: normalized.appearance, radius: normalized.radius };
+  });
+  return result;
+}
+export function createFeature() {
+  let fallback = defaultRadialConfig();
+  function getRadialConfig() {
+    try { return normalizeRadialConfig(window.SillyTavern?.getContext?.()?.extensionSettings?.[EXT_SETTINGS_KEY]?.radial ?? fallback); }
+    catch { return normalizeRadialConfig(fallback); }
+  }
+  function saveRadialConfig(config) {
+    fallback = normalizeRadialConfig(config);
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (ctx?.extensionSettings) {
+        ctx.extensionSettings[EXT_SETTINGS_KEY] ??= {};
+        ctx.extensionSettings[EXT_SETTINGS_KEY].radial = fallback;
+        ctx.saveSettingsDebounced?.();
+      }
+    } catch { /* Session fallback when host storage is unavailable. */ }
+    return getRadialConfig();
+  }
+  return { getRadialConfig, saveRadialConfig };
+}

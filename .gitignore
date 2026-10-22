@@ -11,26 +11,32 @@ node_modules/
 /dist/
 /build/
 /out/
+/release/
+/artifacts/
+*.tgz
 .cache/
 .parcel-cache/
 .vite/
 .eslintcache
 *.tsbuildinfo
 
-# Test/coverage output.
+# Generated test/coverage reports and browser artifacts.
 coverage/
 .nyc_output/
 test-results/
 playwright-report/
 blob-report/
-/tests/*-results.json
-/tests/*-test-output.txt
-/tests/*-validation.md
+playwright/.cache/
 
-# Local host-specific CDP/smoke tools, not portable regression tests.
-/tests/tt-*
-/tests/runtime-smoke.cjs
-# Keep tests/*.test.cjs and tests/module-harness.cjs under version control.
+# Only portable regression tests and their shared harness belong in Git.
+# Local CDP/smoke scripts use machine-specific hosts, ports and paths.
+# This also excludes test JSON, screenshots, logs and validation output.
+/tests/*
+!/tests/*.test.cjs
+!/tests/module-harness.cjs
+
+# Local execution records, not maintained feature/developer documentation.
+/docs/*-validation.md
 
 # Local logs, temporary files and machine-specific configuration.
 *.log

@@ -3,6 +3,9 @@ import * as constants from './constants.js';
 // Explicit cross-feature service contract; linked once by application.js.
 export const requiredServices = [
   "buildUI",
+  "destroyRadial",
+  "destroyRadialSettings",
+  "closeSettingsWindow",
   "clearQuickEditState",
   "closeFavoritesManager",
   "detachPinPickListeners",
@@ -72,6 +75,9 @@ export function createFeature({ state, dependencies }) {
 
   function installCleanup(root, onResize, detachMessageInvalidation) {
     window[`${constants.PLUGIN_NS}Cleanup`] = () => {
+      dependencies.destroyRadial();
+      dependencies.destroyRadialSettings();
+      dependencies.closeSettingsWindow();
       try {
         window.removeEventListener('resize', onResize);
       } catch {

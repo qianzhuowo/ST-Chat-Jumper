@@ -20,6 +20,7 @@ export const requiredServices = [
   "getRootScaleSliderProgress",
   "handleAction",
   "installCleanup",
+  "installRadialGestures",
   "loadFavoritesPreviewMode",
   "loadGlobalHidden",
   "log",
@@ -587,6 +588,7 @@ export function createFeature({ state, dependencies }) {
 
     // 挂载扩展设置面板
     dependencies.mountSettingsPanel();
+    dependencies.installRadialGestures();
 
     dependencies.log('UI 已注入');
   }

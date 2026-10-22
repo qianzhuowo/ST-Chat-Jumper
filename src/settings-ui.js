@@ -3,6 +3,8 @@ import * as constants from './constants.js';
 // Explicit cross-feature service contract; linked once by application.js.
 export const requiredServices = [
   "formatRootScalePercent",
+  "mountRadialSettings",
+  "cancelRadial",
   "getButtonSettings",
   "getChatContainer",
   "getRangeContext",
@@ -118,14 +120,25 @@ export function createFeature({ state, dependencies }) {
     state.lifecycle.settingsMountObserver?.disconnect();
     state.lifecycle.settingsMountObserver = null;
 
+    const entry = document.createElement('button');
+    entry.id = PANEL_ID; entry.type = 'button'; entry.className = 'stcj-settings-launcher stcj-ext-settings';
+    entry.innerHTML = '<span class="stcj-launcher-mark" aria-hidden="true">◉</span><span class="stcj-launcher-copy"><strong>ST Chat Jumper</strong><small>手势轮盘 · 悬浮导航 · 收藏</small></span><span class="stcj-launcher-arrow" aria-hidden="true">›</span>';
+    entry.setAttribute('aria-label', 'ST Chat Jumper，打开设置');
+    entry.setAttribute('aria-haspopup', 'dialog');
+    entry.addEventListener('click', openSettingsWindow);
+    container.append(entry);
+
     const html = `
-      <div id="${PANEL_ID}" class="stcj-ext-settings">
-        <div class="inline-drawer">
-          <div class="inline-drawer-toggle inline-drawer-header">
-            <b>ST Chat Jumper</b>
-            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-          </div>
-          <div class="inline-drawer-content">
+      <dialog id="stcj-settings-window" data-stcj-settings class="stcj-settings-window" aria-labelledby="stcj-settings-title">
+        <div class="stcj-settings-window-header"><div class="stcj-settings-brand"><span aria-hidden="true">◉</span><div><h2 id="stcj-settings-title">Chat Jumper</h2><small>快捷轮盘控制台</small></div></div><button type="button" id="stcj-settings-close" aria-label="关闭设置">×</button></div>
+        <div class="stcj-settings-workspace"><nav class="stcj-settings-nav" role="tablist" aria-label="设置分区">
+          <button type="button" role="tab" data-settings-page="triggers"><span>◎</span>触发与安全</button>
+          <button type="button" role="tab" data-settings-page="appearance"><span>◌</span>外观与形态</button>
+          <button type="button" role="tab" data-settings-page="actions"><span>▤</span>扇区与动作</button>
+          <button type="button" role="tab" data-settings-page="toolbar"><span>↕</span>悬浮条与导航</button>
+          <button type="button" role="tab" data-settings-page="schemes"><span>▦</span>方案与备份</button>
+          <button type="button" role="tab" data-settings-page="about"><span>ⓘ</span>关于与致谢</button>
+        </nav><div class="stcj-settings-window-body"><section class="stcj-settings-page" data-stcj-page="toolbar" id="stcj-page-toolbar" hidden><h2>悬浮条与导航</h2><p class="stcj-page-subtitle">悬浮条与轮盘独立启用，已有按钮顺序及显隐设置完整保留。</p>
             <div class="stcj-settings-global-toggle">
               <button id="stcj-global-hide-btn" class="menu_button" title="点击一键隐藏 ST Chat Jumper 悬浮跳转条（不影响按钮显隐设置）">
                 一键隐藏悬浮条
@@ -165,16 +178,36 @@ export function createFeature({ state, dependencies }) {
               </div>
             </div>
             <div class="stcj-settings-hint">
-              <small>勾选以显示/隐藏按钮，拖拽 <i class="fa-solid fa-grip-vertical"></i> 调整按钮顺序。</small>
+              <small>勾选以显示/隐藏按钮，拖拽 <i class="fa-solid fa-grip-vertical"></i> 或点击 ↑ / ↓ 调整按钮顺序。</small>
             </div>
             <div id="stcj-settings-button-list" class="stcj-settings-list">
             </div>
-          </div>
-        </div>
-      </div>
+          </section><div id="stcj-radial-settings-mount"></div>
+        </div></div><footer class="stcj-settings-footer"><p id="stcj-settings-save-state" role="status">自动保存 · 配置 v2</p><span>ST / TT</span></footer>
+      </dialog>
     `;
 
-    container.insertAdjacentHTML('beforeend', html);
+    document.body.insertAdjacentHTML('beforeend', html);
+    const dialog = document.getElementById('stcj-settings-window');
+    document.getElementById('stcj-settings-close').addEventListener('click', closeSettingsWindow);
+    dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeSettingsWindow(); } });
+    dialog.addEventListener('close', () => document.getElementById(PANEL_ID)?.focus({ preventScroll: true }));
+    dependencies.mountRadialSettings(document.getElementById('stcj-radial-settings-mount'));
+    const tabs = [...dialog.querySelectorAll('[data-settings-page]')];
+    function showPage(id) {
+      tabs.forEach(tab => { const selected = tab.dataset.settingsPage === id; tab.classList.toggle('is-active', selected); tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; });
+      dialog.querySelectorAll('[data-stcj-page]').forEach(page => { page.hidden = page.dataset.stcjPage !== id; page.setAttribute('role', 'tabpanel'); });
+      dialog.querySelector('.stcj-settings-window-body').scrollTop = 0;
+    }
+    tabs.forEach((tab, index) => { tab.id = 'stcj-tab-' + tab.dataset.settingsPage; tab.setAttribute('aria-controls', 'stcj-page-' + tab.dataset.settingsPage); tab.addEventListener('click', () => showPage(tab.dataset.settingsPage)); tab.addEventListener('keydown', event => {
+      let next = index;
+      if (['ArrowDown', 'ArrowRight'].includes(event.key)) next = (index + 1) % tabs.length;
+      else if (['ArrowUp', 'ArrowLeft'].includes(event.key)) next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === 'Home') next = 0; else if (event.key === 'End') next = tabs.length - 1; else return;
+      event.preventDefault(); showPage(tabs[next].dataset.settingsPage); tabs[next].focus();
+    }); });
+    dialog.querySelectorAll('[data-stcj-page]').forEach(page => page.setAttribute('aria-labelledby', 'stcj-tab-' + page.dataset.stcjPage));
+    showPage('triggers');
     renderSettingsButtonList();
 
     // 绑定一键隐藏按钮
@@ -236,6 +269,14 @@ export function createFeature({ state, dependencies }) {
     dependencies.log('设置面板已挂载到 #extensions_settings2');
   }
 
+  function openSettingsWindow() {
+    dependencies.cancelRadial();
+    const dialog = document.getElementById('stcj-settings-window');
+    if (dialog && !dialog.open) dialog.showModal();
+  }
+
+  function closeSettingsWindow() { document.getElementById('stcj-settings-window')?.close(); }
+
   function renderSettingsButtonList() {
     const listEl = document.getElementById('stcj-settings-button-list');
     if (!listEl) return;
@@ -261,8 +302,19 @@ export function createFeature({ state, dependencies }) {
           <input type="checkbox" class="stcj-settings-check" data-btn-id="${cfg.id}" ${cfg.enabled ? 'checked' : ''} />
           <span>${label}</span>
         </label>
+        <button type="button" class="stcj-settings-move-up" aria-label="上移${label}">↑</button>
+        <button type="button" class="stcj-settings-move-down" aria-label="下移${label}">↓</button>
       `;
 
+      const move = direction => {
+        const index = sorted.findIndex(b => b.id === cfg.id), target = index + direction;
+        if (target < 0 || target >= sorted.length) return;
+        [sorted[index], sorted[target]] = [sorted[target], sorted[index]];
+        sorted.forEach((button, order) => { button.order = order; });
+        dependencies.saveButtonSettings(sorted); refreshButtonLayout(); renderSettingsButtonList();
+      };
+      item.querySelector('.stcj-settings-move-up').addEventListener('click', () => move(-1));
+      item.querySelector('.stcj-settings-move-down').addEventListener('click', () => move(1));
       listEl.appendChild(item);
     }
 
@@ -349,5 +401,5 @@ export function createFeature({ state, dependencies }) {
     });
   }
 
-  return { refreshButtonLayout, getButtonLabel, mountSettingsPanel, renderSettingsButtonList, initSettingsDragDrop };
+  return { openSettingsWindow, closeSettingsWindow, refreshButtonLayout, getButtonLabel, mountSettingsPanel, renderSettingsButtonList, initSettingsDragDrop };
 }
