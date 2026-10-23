@@ -1,11 +1,12 @@
 const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
-let configModule, radialModule, registryModule, viewModule;
+let configModule, radialModule, registryModule, viewModule, radialSettingsModule;
 before(async () => {
   configModule = await import('../src/radial-config.js');
   radialModule = await import('../src/radial.js');
   viewModule = await import('../src/radial-view.js');
   registryModule = await import('../src/action-registry.js');
+  radialSettingsModule = await import('../src/radial-settings.js');
 });
 class Target {
   constructor() { this.listeners = new Map(); }
@@ -19,18 +20,71 @@ class Target {
   count() { return [...this.listeners.values()].reduce((n, s) => n + s.size, 0); }
 }
 class Element extends Target {
-  constructor() { super(); this.children = []; this.style = { setProperty(key, value) { this[key] = value; } }; this.dataset = {}; this.classes = new Set(); this.classList = { toggle: (name, on) => on ? this.classes.add(name) : this.classes.delete(name) }; this.isConnected = true; }
-  append(...children) { this.children.push(...children); children.forEach(c => c.parent = this); }
+  constructor(tag = 'div') {
+    super();
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.attributes = new Map();
+    this.style = { setProperty(key, value) { this[key] = value; }, getPropertyValue(key) { return this[key] || ''; } };
+    this.dataset = {};
+    this.classes = new Set();
+    this.classList = {
+      add: (...names) => names.forEach(n => n && this.classes.add(n)),
+      remove: (...names) => names.forEach(n => this.classes.delete(n)),
+      toggle: (name, on) => { const next = on === undefined ? !this.classes.has(name) : !!on; if (next) this.classes.add(name); else this.classes.delete(name); return next; },
+      contains: name => this.classes.has(name),
+    };
+    this.isConnected = true;
+  }
+  set className(val) { this._className = val; this.classes = new Set(String(val || '').split(/\s+/).filter(Boolean)); }
+  get className() { return [...this.classes].join(' '); }
+  append(...children) {
+    for (const c of children) {
+      if (c && typeof c === 'object') { this.children.push(c); c.parent = this; c.parentNode = this; }
+    }
+  }
   replaceChildren(...children) { this.children = []; this.append(...children); }
   remove() { this.isConnected = false; if (this.parent) this.parent.children = this.parent.children.filter(c => c !== this); }
-  setAttribute() {}
+  setAttribute(k, v) { this.attributes.set(k, String(v)); }
+  getAttribute(k) { return this.attributes.has(k) ? this.attributes.get(k) : null; }
+  checkValidity() { return true; }
+  reportValidity() {}
   focus() {}
-  closest() { return null; }
+  select() {}
+  scrollIntoView() {}
+  click() { this.emit('click'); }
+  closest(sel) {
+    let cur = this;
+    while (cur) {
+      if (sel === 'dialog' && cur.tagName === 'DIALOG') return cur;
+      cur = cur.parent;
+    }
+    return null;
+  }
+  all() {
+    const out = [];
+    const walk = node => { for (const c of node.children || []) { out.push(c); walk(c); } };
+    walk(this);
+    return out;
+  }
+  querySelectorAll(sel) {
+    return this.all().filter(n => {
+      if (sel === 'select') return n.tagName === 'SELECT';
+      if (sel === 'button') return n.tagName === 'BUTTON';
+      if (sel === '[data-panel-theme-btn]') return n.dataset?.panelThemeBtn != null;
+      if (sel.startsWith('[aria-label="') && sel.endsWith('"]')) return n.getAttribute('aria-label') === sel.slice(13, -2);
+      if (sel.startsWith('[data-settings-page=') && sel.endsWith(']')) return n.dataset?.settingsPage === sel.slice(20, -1);
+      if (sel.startsWith('[data-stcj-page=') && sel.endsWith(']')) return n.dataset?.stcjPage === sel.slice(16, -1);
+      if (sel.startsWith('.')) return n.classes?.has(sel.slice(1));
+      return false;
+    });
+  }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 const chatTarget = { closest: selector => selector === '#chat' ? chatTarget : null };
 const inputTarget = { closest: selector => selector === '#chat' ? chatTarget : inputTarget };
 function runtime(overrides = {}) {
-  const document = new Target(); document.body = new Element(); document.createElement = () => new Element(); document.createElementNS = () => new Element(); document.activeElement = new Element();
+  const document = new Target(); document.body = new Element('body'); document.createElement = tag => new Element(tag); document.createElementNS = (_, tag) => new Element(tag); document.createTextNode = text => { const t = new Element('#text'); t.textContent = text; return t; }; document.activeElement = new Element();
   const window = new Target();
   Object.assign(globalThis, { document, window, innerWidth: 1000, innerHeight: 700 });
   const config = { ...configModule.defaultRadialConfig(), enabled: true, mouseEnabled: true, ...overrides };
@@ -160,4 +214,223 @@ test('shared wheel preview only selects configured sectors and exposes semantic 
   assert.equal(view.buttons.length, 2); assert.ok(view.buttons[0].style.clipPath.startsWith('polygon('));
   view.buttons[1].emit('click'); assert.equal(picked, 1); view.setSelected(1); assert.equal(view.buttons[1].classes.has('is-selected'), true);
   view.center.emit('click'); assert.equal(back, 1); assert.equal(r.executed.length, 0); r.services.destroyRadial();
+});
+
+test('co-screen submenu renders primary and secondary rings together, locks parent in outer ring, clears empty sectors, and unlocks with inward hysteresis', () => {
+  const r = runtime({
+    menus: [
+      {
+        id: 'main',
+        label: '主轮盘',
+        items: [
+          { label: '打开子轮盘', submenu: 'child' },
+          { label: '下一条', action: { type: 'plugin', id: 'next' } },
+          { label: '空主扇区' },
+          { label: '上一条', action: { type: 'plugin', id: 'prev' } },
+        ],
+      },
+      {
+        id: 'child',
+        label: '子轮盘',
+        items: [
+          { label: '子动作北', action: { type: 'plugin', id: 'recent1' } },
+          { label: '空子扇区东' },
+          { label: '子动作南', action: { type: 'plugin', id: 'showRange' } },
+          { label: '子动作西', action: { type: 'plugin', id: 'resetRange' } },
+        ],
+      },
+    ],
+  });
+  const d = r.document;
+  // Drag north (sector 0 of main -> submenu 'child')
+  d.emit('pointerdown', { clientX: 400, clientY: 300 });
+  d.emit('pointermove', { clientX: 400, clientY: 220 });
+  assert.equal(r.opened(), true);
+  const overlay = d.body.children[0];
+  const ring = overlay.children[0];
+  // Both primary items and secondary .stcj-radial-subring co-exist in the same ring (no screen jump)
+  const primaryItems = ring.all().filter(n => n.classes?.has('stcj-radial-item'));
+  const subring = ring.all().find(n => n.classes?.has('stcj-radial-subring'));
+  const subItems = ring.all().filter(n => n.classes?.has('stcj-radial-subitem'));
+  assert.equal(primaryItems.length, 4);
+  assert.ok(subring, 'co-screen subring is mounted inside the primary ring');
+  assert.equal(subItems.length, 4);
+  assert.equal(primaryItems[0].classes.has('is-submenu-open'), true);
+
+  // Move into outer secondary ring north (radius ~ 155px -> clientY = 145)
+  d.emit('pointermove', { clientX: 400, clientY: 145 });
+  assert.equal(subItems[0].classes.has('is-selected'), true);
+
+  // Move angularly in outer secondary ring to East (empty secondary sector 1: clientX = 555, clientY = 300)
+  // Parent sector 0 remains locked (submenu stays open), and empty secondary sector clears selection to prevent mis-trigger
+  d.emit('pointermove', { clientX: 555, clientY: 300 });
+  assert.equal(ring.all().some(n => n.classes?.has('stcj-radial-subring')), true, 'parent submenu stays locked while moving in outer subring');
+  assert.equal(subItems.some(n => n.classes.has('is-selected')), false, 'empty secondary sector clears hit selection');
+
+  // Move in outer secondary ring to South (sector 2: clientX = 400, clientY = 455) -> selects secondary sector 2 while parent 0 remains locked
+  d.emit('pointermove', { clientX: 400, clientY: 455 });
+  assert.equal(subItems[2].classes.has('is-selected'), true);
+  assert.equal(primaryItems[0].classes.has('is-submenu-open'), true);
+
+  // Retreat back inside primary inner ring East (distance 70px <= unlockRadius: clientX = 470, clientY = 300) -> inward hysteresis unlocks parent and switches to primary sector 1 ('next')
+  d.emit('pointermove', { clientX: 470, clientY: 300 });
+  const ringAfterUnlock = overlay.children[0];
+  const primaryAfterUnlock = ringAfterUnlock.all().filter(n => n.classes?.has('stcj-radial-item'));
+  assert.equal(ringAfterUnlock.all().some(n => n.classes?.has('stcj-radial-subring')), false, 'retreating inside primary unlock radius closes submenu');
+  assert.equal(primaryAfterUnlock[1].classes.has('is-selected'), true);
+
+  // Move to empty primary sector South (sector 2: clientX = 400, clientY = 370) -> empty primary sector clears hit and release does not execute anything
+  d.emit('pointermove', { clientX: 400, clientY: 370 });
+  assert.equal(primaryAfterUnlock.some(n => n.classes.has('is-selected')), false, 'empty primary sector clears hit selection');
+  d.emit('pointerup', { clientX: 400, clientY: 370 });
+  assert.equal(r.executed.length, 0, 'releasing on empty sector never executes an action');
+
+  // Continuous drag from primary sector 0 directly into secondary outer ring South (sector 2) and release -> executes secondary action in one gesture
+  d.emit('pointerdown', { clientX: 400, clientY: 300 });
+  d.emit('pointermove', { clientX: 400, clientY: 220 });
+  d.emit('pointermove', { clientX: 400, clientY: 455 });
+  d.emit('pointerup', { clientX: 400, clientY: 455 });
+  assert.equal(r.executed.length, 1);
+  assert.equal(r.executed[0].id, 'showRange');
+
+  // Edge clamping & non-shifting center: opening at top-left edge (10, 10) reserves total subOuter radius and does not shift center when submenu opens
+  r.services.openRadial(10, 10);
+  const edgeRingBefore = d.body.children[0].children[0];
+  const leftBefore = parseFloat(edgeRingBefore.style.left);
+  const topBefore = parseFloat(edgeRingBefore.style.top);
+  const primaryBtn0 = edgeRingBefore.all().find(n => n.classes?.has('stcj-radial-item'));
+  primaryBtn0.emit('click');
+  const edgeRingAfter = d.body.children[0].children[0];
+  const leftAfter = parseFloat(edgeRingAfter.style.left);
+  const topAfter = parseFloat(edgeRingAfter.style.top);
+  assert.equal(leftBefore, leftAfter, 'wheel center X does not shift when co-screen submenu opens');
+  assert.equal(topBefore, topAfter, 'wheel center Y does not shift when co-screen submenu opens');
+  const subringEl = edgeRingAfter.all().find(n => n.classes?.has('stcj-radial-subring'));
+  const subOuterRadius = parseFloat(subringEl.style.width) / 2;
+  assert.ok(leftAfter - subOuterRadius >= 12 && topAfter - subOuterRadius >= 12, 'expanded outer subring fits inside viewport edge margin');
+  r.services.destroyRadial();
+});
+
+test('settings UI supports same-page primary/secondary free editing, co-screen preview, theme sync, copy/paste, undo/redo, and simple mode', () => {
+  const r = runtime();
+  const dialog = new Element('dialog');
+  dialog.dataset.consoleMode = 'pro';
+  dialog.dataset.sidebarCollapsed = 'false';
+  const themeHostBtn = new Element('button'); themeHostBtn.dataset.panelThemeBtn = 'host';
+  const themeLightBtn = new Element('button'); themeLightBtn.dataset.panelThemeBtn = 'light';
+  const themeDarkBtn = new Element('button'); themeDarkBtn.dataset.panelThemeBtn = 'dark';
+  const mount = new Element('div');
+  dialog.append(themeHostBtn, themeLightBtn, themeDarkBtn, mount);
+  r.document.body.append(dialog);
+
+  let savedCount = 0;
+  let savedConfig = r.config;
+  const settingsFeature = radialSettingsModule.createFeature({
+    dependencies: {
+      getRadialConfig: () => savedConfig,
+      saveRadialConfig: next => { savedConfig = configModule.normalizeRadialConfig(next); savedCount++; },
+      listShortcutActions: () => [
+        { type: 'plugin', id: 'prev', label: '上一条' },
+        { type: 'plugin', id: 'next', label: '下一条' },
+        { type: 'plugin', id: 'recent1', label: '最近收藏' },
+        { type: 'plugin', id: 'showRange', label: '区间选择' },
+      ],
+      cancelRadial: () => r.services.cancelRadial(),
+      openRadial: () => r.services.openRadial(),
+      createRadialView: opts => viewModule.createFeature().createRadialView(opts),
+      loadFavoritesPreviewMode: () => 'swipe_default',
+      saveFavoritesPreviewMode: () => {},
+    },
+  });
+  settingsFeature.mountRadialSettings(mount);
+
+  // 1. Sidebar theme button syncs with dropdown and vice-versa
+  themeLightBtn.emit('click');
+  assert.equal(dialog.dataset.panelTheme, 'light');
+  assert.equal(savedConfig.panelTheme, 'light');
+  const panelThemeSelect = mount.querySelector('[aria-label="设置窗口主题"]');
+  assert.equal(panelThemeSelect.value, 'light');
+  panelThemeSelect.value = 'dark';
+  panelThemeSelect.emit('change');
+  assert.equal(dialog.dataset.panelTheme, 'dark');
+  assert.equal(savedConfig.panelTheme, 'dark');
+  assert.equal(themeDarkBtn.classes.has('is-active'), true);
+
+  // 2. Same-page co-screen preview and inline secondary wheel free editor on actions page
+  const actionsPage = mount.querySelector('[data-stcj-page=actions]');
+  assert.ok(actionsPage);
+  const inlineSubwheel = actionsPage.all().find(n => n.dataset?.inlineSubwheel === 'true');
+  assert.ok(inlineSubwheel, 'inline secondary wheel workbench exists on the same actions page');
+  const previewSubring = actionsPage.all().find(n => n.classes?.has('stcj-radial-subring'));
+  assert.ok(previewSubring, 'live preview renders primary and secondary rings co-screen');
+
+  // Edit secondary wheel name, sector label, action, count, and independent appearance on the same actions page
+  const subNameInput = actionsPage.querySelector('[aria-label="二级轮盘名称"]');
+  subNameInput.value = '快捷收藏子盘';
+  subNameInput.emit('change');
+  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').label, '快捷收藏子盘');
+
+  const subLabelInput = actionsPage.querySelector('[aria-label="二级扇区标签"]');
+  subLabelInput.value = '同页改名子扇区';
+  subLabelInput.emit('change');
+  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').items[0].label, '同页改名子扇区');
+
+  const subIndepToggle = actionsPage.querySelector('[aria-label="同页独立二级外观"]');
+  subIndepToggle.checked = true;
+  subIndepToggle.emit('change');
+  assert.ok(savedConfig.menus.find(m => m.id === 'favorites').appearance);
+  const subThemeSelect = actionsPage.querySelector('[aria-label="同页二级配色方案"]');
+  subThemeSelect.value = 'forest';
+  subThemeSelect.emit('change');
+  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').appearance.theme, 'forest');
+
+  // 3. Copy & Paste sector + Undo & Redo
+  const findBtn = text => actionsPage.all().find(n => n.tagName === 'BUTTON' && n.textContent === text);
+  const slot1Input = actionsPage.querySelector('[aria-label="扇区 1 标签"]');
+  slot1Input.value = '主扇区复制源';
+  slot1Input.emit('change');
+  findBtn('📋 复制扇区').emit('click');
+  findBtn('下一槽 ▶').emit('click');
+  findBtn('📥 粘贴扇区').emit('click');
+  assert.equal(savedConfig.menus[0].items[1].label, '主扇区复制源');
+
+  // Undo & Redo
+  findBtn('↶ 撤销').emit('click');
+  assert.notEqual(savedConfig.menus[0].items[1].label, '主扇区复制源');
+  findBtn('↷ 重做').emit('click');
+  assert.equal(savedConfig.menus[0].items[1].label, '主扇区复制源');
+
+  // 4. Simple mode toggle does not lose or alter saved config
+  const snapshotBeforeSimple = JSON.stringify(savedConfig);
+  dialog.dataset.consoleMode = 'simple';
+  assert.equal(JSON.stringify(savedConfig), snapshotBeforeSimple);
+  assert.ok(savedCount > 0);
+  settingsFeature.destroyRadialSettings();
+  r.services.destroyRadial();
+});
+
+test('sidebar collapse toggle syncs aria-expanded and retains accessible names for icon-only tabs, and CSS contains responsive breakpoints', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const settingsUiSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings-ui.js'), 'utf8');
+  const cssSource = fs.readFileSync(path.join(__dirname, '..', 'radial.css'), 'utf8');
+
+  assert.match(settingsUiSource, /id="stcj-sidebar-toggle"[^>]*aria-expanded="true"/);
+  assert.match(settingsUiSource, /sidebarToggle\.setAttribute\('aria-expanded',\s*String\(!nextCollapsed\)\)/);
+  assert.match(settingsUiSource, /sidebarToggle\.setAttribute\('aria-label',\s*nextCollapsed\s*\?\s*'展开侧边导航'\s*:\s*'收起侧边导航'\)/);
+  for (const [pageId, label] of [
+    ['triggers', '触发与安全'],
+    ['appearance', '外观与形态'],
+    ['actions', '扇区与动作'],
+    ['toolbar', '悬浮条与导航'],
+    ['schemes', '方案与备份'],
+    ['about', '关于与致谢'],
+  ]) {
+    assert.match(settingsUiSource, new RegExp(`data-settings-page="${pageId}"[^>]*aria-label="${label}"`), `tab ${pageId} has accessible name`);
+  }
+  assert.match(cssSource, /@media\(max-width:1050px\)/);
+  assert.match(cssSource, /@media\(max-width:850px\)/);
+  assert.match(cssSource, /@media\(max-width:600px\)/);
+  assert.match(cssSource, /\.stcj-radial-subring\b/);
+  assert.match(cssSource, /\.stcj-inline-subwheel-card\b/);
 });

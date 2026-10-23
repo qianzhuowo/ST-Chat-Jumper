@@ -1,4 +1,4 @@
-import { resolveWheelAppearance } from './radial-view.js';
+import { resolveSubringBounds, resolveWheelAppearance } from './radial-view.js';
 import { normalizeRadialAppearance } from './radial-config.js';
 export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView'];
 
@@ -32,42 +32,147 @@ export function createFeature({ dependencies }) {
     return config.enabled && !isRadialExcluded(target) && (config.scope === 'page' || !!target.closest('#chat'));
   }
   function menuById(id) { return active?.config.menus.find(m => m.id === id); }
+  function computeWheelMetrics(config, menu, origin, activeSubmenu = null) {
+    const baseApp = normalizeRadialAppearance(menu.appearance || config.appearance);
+    const desiredRadius = config.radius * baseApp.scale / 100;
+    const maxViewportRadius = Math.max(12, (Math.min(innerWidth, innerHeight) - 32) / 2);
+    const submenus = [
+      ...(activeSubmenu ? [activeSubmenu] : []),
+      ...(menu.items || []).map(item => item?.submenu && config.menus.find(m => m.id === item.submenu)).filter(Boolean),
+    ];
+    const calcTotal = r => {
+      if (!submenus.length) return r;
+      const app = resolveWheelAppearance(config, menu, r);
+      const inner = r * app.innerRatio / 100;
+      let maxOuter = r;
+      for (const sub of submenus) {
+        const subApp = resolveWheelAppearance(config, sub, r);
+        const { subOuter } = resolveSubringBounds(r, inner, subApp, false);
+        if (subOuter > maxOuter) maxOuter = subOuter;
+      }
+      return maxOuter;
+    };
+    const unscaledTotal = calcTotal(desiredRadius);
+    const scaleFactor = unscaledTotal > maxViewportRadius ? maxViewportRadius / unscaledTotal : 1;
+    const radius = Math.max(12, desiredRadius * scaleFactor);
+    const totalRadius = Math.min(maxViewportRadius, calcTotal(radius));
+    const center = radialCenter(origin.x, origin.y, totalRadius, innerWidth, innerHeight);
+    return { radius, totalRadius, center };
+  }
   function render() {
     const a = active;
-    a.appearance = normalizeRadialAppearance(a.menu.appearance || a.config.appearance);
-    a.radius = Math.min(a.config.radius * a.appearance.scale / 100, Math.max(12, (Math.min(innerWidth, innerHeight) - 32) / 2));
+    const metrics = computeWheelMetrics(a.config, a.menu, a.origin, a.submenu);
+    a.radius = metrics.radius;
+    a.totalRadius = metrics.totalRadius;
+    a.center = metrics.center;
     a.appearance = resolveWheelAppearance(a.config, a.menu, a.radius);
-    a.center = radialCenter(a.origin.x, a.origin.y, a.radius, innerWidth, innerHeight);
+    a.subAppearance = a.submenu ? resolveWheelAppearance(a.config, a.submenu, a.radius) : null;
     a.overlay.replaceChildren();
-    a.view = dependencies.createRadialView({ menu: a.menu, appearance: a.appearance, radius: a.radius,
-      onChoose: i => { if (a.pointerId == null) choose(i); },
-      onCenter: () => { if (a.menu.id === 'main') cancelRadial(); else enterMenu('main'); }, selected: a.selected });
+    a.view = dependencies.createRadialView({
+      menu: a.menu,
+      appearance: a.appearance,
+      radius: a.radius,
+      selected: a.selected,
+      submenu: a.submenu,
+      subAppearance: a.subAppearance,
+      subSelected: a.subSelected,
+      parentIndex: a.lockedParentIndex,
+      activeTier: 'main',
+      onChoose: i => { if (a.pointerId == null) chooseMain(i); },
+      onSubChoose: i => { if (a.pointerId == null) chooseSub(i); },
+      onCenter: () => {
+        if (a.submenu) closeSubmenu();
+        else cancelRadial();
+      },
+    });
     const ring = a.view.element;
-    ring.style.left = a.center.x + 'px'; ring.style.top = a.center.y + 'px';
-    a.overlay.append(ring); a.buttons = a.view.buttons;
-    const hint = document.createElement('div'); hint.className = 'stcj-radial-hint';
-    hint.textContent = a.menu.label + ' · ' + (a.pointerId != null ? '松手执行 / 中心取消' : '点击选择 / 方向键、Enter') + ' · Esc 取消';
-    hint.style.top = Math.min(innerHeight - 32, a.center.y + a.radius + 8) + 'px'; a.overlay.append(hint);
+    ring.style.left = a.center.x + 'px';
+    ring.style.top = a.center.y + 'px';
+    a.overlay.append(ring);
+    a.buttons = a.view.buttons;
+    a.subButtons = a.view.subButtons || [];
+    const hint = document.createElement('div');
+    hint.className = 'stcj-radial-hint';
+    const outerRadius = a.view.subringBounds ? a.view.subringBounds.subOuter : a.radius;
+    const titleLabel = a.submenu ? `${a.menu.label} › ${a.submenu.label} (同屏二级)` : a.menu.label;
+    hint.textContent = titleLabel + ' · ' + (a.pointerId != null ? '外滑选子轮盘 / 内退解锁 / 中心取消' : '点击选择 / 方向键、Enter') + ' · Esc 取消';
+    hint.style.top = Math.min(innerHeight - 32, a.center.y + outerRadius + 8) + 'px';
+    a.overlay.append(hint);
   }
-  function enterMenu(id) {
-    const menu = menuById(id); if (!menu) return;
-    clearSubmenu(); active.menu = menu; active.selected = -1; active.enterPoint = lastPoint ? { ...lastPoint } : null; render();
+  function openSubmenu(id, parentIndex, focusSub = false) {
+    const sub = menuById(id);
+    if (!sub) return;
+    clearSubmenu();
+    const changed = active.submenu?.id !== sub.id || active.lockedParentIndex !== parentIndex;
+    active.submenu = sub;
+    active.lockedParentIndex = parentIndex;
+    active.selected = parentIndex;
+    if (changed) active.subSelected = -1;
+    if (focusSub) {
+      active.focusTier = 'sub';
+      active.enterPoint = lastPoint ? { ...lastPoint } : null;
+    }
+    if (changed) render();
   }
-  function choose(index) {
+  function closeSubmenu() {
+    if (!active) return;
+    clearSubmenu();
+    active.submenu = null;
+    active.subSelected = -1;
+    active.lockedParentIndex = -1;
+    active.enteredSubring = false;
+    active.focusTier = 'main';
+    render();
+  }
+  function chooseMain(index) {
     if (!active) return;
     const item = active.menu.items[index];
-    if (item?.submenu) { active.pointerId = null; enterMenu(item.submenu); return; }
+    if (item?.submenu) {
+      active.pointerId = null;
+      openSubmenu(item.submenu, index, true);
+      render();
+      return;
+    }
     cancelRadial();
     if (item?.action) void dependencies.executeShortcutAction(item.action);
+  }
+  function chooseSub(index) {
+    if (!active?.submenu) return;
+    const item = active.submenu.items[index];
+    if (!item?.action) {
+      // Empty secondary slot clears hit and never executes a parent or stale action.
+      cancelRadial();
+      return;
+    }
+    cancelRadial();
+    void dependencies.executeShortcutAction(item.action);
   }
   function openRadial(x = innerWidth / 2, y = innerHeight / 2, pointerId = null, touch = false) {
     cancelRadial();
     const config = dependencies.getRadialConfig(); if (!config.enabled) return false;
-    const radius = Math.min(config.radius, Math.max(12, (Math.min(innerWidth, innerHeight) - 32) / 2));
+    const menu = config.menus.find(m => m.id === 'main');
+    const metrics = computeWheelMetrics(config, menu, { x, y });
     const overlay = document.createElement('div'); overlay.id = 'stcj-radial'; overlay.className = 'stcj-radial-overlay';
     overlay.tabIndex = -1; overlay.setAttribute('aria-label', 'Chat Jumper 快捷轮盘');
     previousFocus = document.activeElement;
-    active = { config, center: radialCenter(x, y, radius, innerWidth, innerHeight), radius, overlay, pointerId, touch, origin: { x, y }, menu: config.menus.find(m => m.id === 'main'), selected: -1 };
+    active = {
+      config,
+      center: metrics.center,
+      radius: metrics.radius,
+      totalRadius: metrics.totalRadius,
+      overlay,
+      pointerId,
+      touch,
+      origin: { x, y },
+      menu,
+      selected: -1,
+      submenu: null,
+      subAppearance: null,
+      subSelected: -1,
+      lockedParentIndex: -1,
+      enteredSubring: false,
+      focusTier: 'main',
+    };
     overlay.addEventListener('click', e => { if (e.target === overlay) cancelRadial(); });
     document.body.append(overlay); render(); overlay.focus({ preventScroll: true });
     return true;
@@ -78,11 +183,112 @@ export function createFeature({ dependencies }) {
     // A submenu must receive a fresh movement, never inherit its parent's release.
     if (a.enterPoint && Math.hypot(x - a.enterPoint.x, y - a.enterPoint.y) < 8) return;
     a.enterPoint = null;
-    const i = radialHitTest(x, y, a.center, a.menu.items.length, a.radius * a.appearance.innerRatio / 100, Math.max(a.config.cancelDistance, a.radius + 40), a.appearance.rotation);
-    if (i === a.selected) return;
-    clearSubmenu(); a.selected = i;
-    a.buttons.forEach((button, index) => button.classList.toggle('is-selected', index === i));
-    if (a.menu.items[i]?.submenu) submenuTimer = setTimeout(() => { if (active === a && a.selected === i) enterMenu(a.menu.items[i].submenu); }, a.config.submenuDelay);
+    const inner1 = a.radius * a.appearance.innerRatio / 100;
+    const primaryCancel = Math.max(a.config.cancelDistance, a.radius + 40);
+    const distance = Math.hypot(x - a.center.x, y - a.center.y);
+
+    // 1. Center deadzone clears both primary and secondary hits.
+    if (distance < inner1) {
+      clearSubmenu();
+      a.selected = -1;
+      a.subSelected = -1;
+      a.enteredSubring = false;
+      a.lockedParentIndex = -1;
+      a.focusTier = 'main';
+      if (a.submenu) { a.submenu = null; render(); }
+      else { a.view.setSelected(-1); a.view.setSubSelected(-1); }
+      return;
+    }
+
+    // 2. If a submenu is open on the same screen, handle outer ring hit-testing, parent lock & inward hysteresis unlock.
+    if (a.submenu) {
+      const bounds = a.view.subringBounds || resolveSubringBounds(a.radius, inner1, a.subAppearance, false);
+      const outerCancel = Math.max(primaryCancel, bounds.subOuter + 36);
+      const unlockRadius = Math.max(inner1 + 6, a.radius - 12);
+
+      if (distance > outerCancel) {
+        clearSubmenu();
+        a.selected = -1;
+        a.subSelected = -1;
+        a.view.setSelected(-1);
+        a.view.setSubSelected(-1);
+        return;
+      }
+
+      if (distance >= bounds.subInner) {
+        a.enteredSubring = true;
+        a.focusTier = 'sub';
+        if (a.lockedParentIndex >= 0 && a.selected !== a.lockedParentIndex) {
+          a.selected = a.lockedParentIndex;
+          a.view.setSelected(a.selected);
+        }
+        const rawSub = distance <= bounds.subOuter
+          ? radialHitTest(x, y, a.center, a.submenu.items.length, bounds.subInner, bounds.subOuter, a.subAppearance.rotation)
+          : -1;
+        const subItem = rawSub >= 0 ? a.submenu.items[rawSub] : null;
+        // Empty secondary area clears hit to prevent mis-triggering.
+        const nextSub = subItem?.action ? rawSub : -1;
+        if (nextSub !== a.subSelected) {
+          a.subSelected = nextSub;
+          a.view.setSubSelected(nextSub);
+        }
+        return;
+      }
+
+      if (a.enteredSubring && distance > unlockRadius) {
+        // Hysteresis band: keep parent sector locked while clearing outer hit.
+        if (a.lockedParentIndex >= 0 && a.selected !== a.lockedParentIndex) {
+          a.selected = a.lockedParentIndex;
+          a.view.setSelected(a.selected);
+        }
+        if (a.subSelected !== -1) {
+          a.subSelected = -1;
+          a.view.setSubSelected(-1);
+        }
+        return;
+      }
+
+      // Retreated inward past hysteresis threshold: unlock parent and return to primary ring.
+      a.enteredSubring = false;
+      a.focusTier = 'main';
+      if (a.subSelected !== -1) {
+        a.subSelected = -1;
+        a.view.setSubSelected(-1);
+      }
+    }
+
+    // 3. Primary ring hit test.
+    if (distance > primaryCancel) {
+      clearSubmenu();
+      a.selected = -1;
+      a.subSelected = -1;
+      a.view.setSelected(-1);
+      a.view.setSubSelected(-1);
+      return;
+    }
+    const rawPrimary = radialHitTest(x, y, a.center, a.menu.items.length, inner1, primaryCancel, a.appearance.rotation);
+    const primaryItem = rawPrimary >= 0 ? a.menu.items[rawPrimary] : null;
+    // Empty primary slot clears hit to prevent mis-triggering.
+    const i = (primaryItem?.action || primaryItem?.submenu) ? rawPrimary : -1;
+    if (i === a.selected && ((primaryItem?.submenu && a.submenu?.id === primaryItem.submenu) || (!primaryItem?.submenu && !a.submenu))) return;
+    clearSubmenu();
+    a.selected = i;
+    a.subSelected = -1;
+    if (primaryItem?.submenu) {
+      openSubmenu(primaryItem.submenu, i, false);
+      submenuTimer = setTimeout(() => {
+        if (active === a && a.selected === i && a.submenu?.id === primaryItem.submenu) {
+          a.focusTier = 'sub';
+          a.enterPoint = lastPoint ? { ...lastPoint } : null;
+        }
+      }, a.config.submenuDelay);
+    } else if (a.submenu) {
+      closeSubmenu();
+      a.selected = i;
+      a.view.setSelected(i);
+    } else {
+      a.view.setSelected(i);
+    }
   }
   function installRadialGestures() {
     detach?.();
@@ -136,9 +342,20 @@ export function createFeature({ dependencies }) {
         markConsumed(e.clientX, e.clientY);
         e.stopImmediatePropagation(); // Activated gestures own this release (including pin-pick listeners).
         const i = active.selected;
+        const subIdx = active.subSelected;
+        const wasInSubring = active.enteredSubring;
         if (e.cancelable) e.preventDefault();
-        if (i < 0 && active.touch && Math.hypot(e.clientX - active.origin.x, e.clientY - active.origin.y) < 10) { active.pointerId = null; render(); }
-        else if (i < 0) cancelRadial(); else choose(i);
+        if (wasInSubring) {
+          if (subIdx >= 0) chooseSub(subIdx);
+          else cancelRadial();
+        } else if (i < 0 && active.touch && Math.hypot(e.clientX - active.origin.x, e.clientY - active.origin.y) < 10) {
+          active.pointerId = null;
+          render();
+        } else if (i < 0) {
+          cancelRadial();
+        } else {
+          chooseMain(i);
+        }
       }
     }, { capture: true, passive: false });
     on(document, 'contextmenu', e => {
@@ -150,14 +367,36 @@ export function createFeature({ dependencies }) {
     on(document, 'keydown', e => {
       if (active) {
         if (e.key === 'Escape' || e.key === 'Tab') { cancelRadial(); if (e.key === 'Escape') e.preventDefault(); return; }
-        if (e.key === 'Backspace') { e.preventDefault(); enterMenu('main'); return; }
+        if (e.key === 'Backspace') {
+          e.preventDefault();
+          if (active.submenu) closeSubmenu();
+          return;
+        }
         if (e.key.startsWith('Arrow')) {
           e.preventDefault(); clearSubmenu();
+          const step = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1;
+          if (active.focusTier === 'sub' && active.submenu) {
+            const count = active.submenu.items.length; if (!count) return;
+            active.subSelected = (active.subSelected + step + count) % count;
+            active.view.setSubSelected(active.subSelected);
+            return;
+          }
           const count = active.menu.items.length; if (!count) return;
-          active.selected = (active.selected + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1) + count) % count;
-          active.buttons.forEach((b, i) => b.classList.toggle('is-selected', i === active.selected)); return;
+          active.selected = (active.selected + step + count) % count;
+          const item = active.menu.items[active.selected];
+          if (item?.submenu) openSubmenu(item.submenu, active.selected, false);
+          else if (active.submenu) { closeSubmenu(); active.selected = (active.selected + count) % count; active.view.setSelected(active.selected); }
+          else active.view.setSelected(active.selected);
+          return;
         }
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(active.selected); }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (active.focusTier === 'sub' && active.submenu) {
+            if (active.subSelected >= 0) chooseSub(active.subSelected);
+          } else {
+            chooseMain(active.selected);
+          }
+        }
         return;
       }
       const c = dependencies.getRadialConfig();

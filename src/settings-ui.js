@@ -129,16 +129,47 @@ export function createFeature({ state, dependencies }) {
     container.append(entry);
 
     const html = `
-      <dialog id="stcj-settings-window" data-stcj-settings class="stcj-settings-window" aria-labelledby="stcj-settings-title">
-        <div class="stcj-settings-window-header"><div class="stcj-settings-brand"><span aria-hidden="true">◉</span><div><h2 id="stcj-settings-title">Chat Jumper</h2><small>快捷轮盘控制台</small></div></div><button type="button" id="stcj-settings-close" aria-label="关闭设置">×</button></div>
-        <div class="stcj-settings-workspace"><nav class="stcj-settings-nav" role="tablist" aria-label="设置分区">
-          <button type="button" role="tab" data-settings-page="triggers"><span>◎</span>触发与安全</button>
-          <button type="button" role="tab" data-settings-page="appearance"><span>◌</span>外观与形态</button>
-          <button type="button" role="tab" data-settings-page="actions"><span>▤</span>扇区与动作</button>
-          <button type="button" role="tab" data-settings-page="toolbar"><span>↕</span>悬浮条与导航</button>
-          <button type="button" role="tab" data-settings-page="schemes"><span>▦</span>方案与备份</button>
-          <button type="button" role="tab" data-settings-page="about"><span>ⓘ</span>关于与致谢</button>
-        </nav><div class="stcj-settings-window-body"><section class="stcj-settings-page" data-stcj-page="toolbar" id="stcj-page-toolbar" hidden><h2>悬浮条与导航</h2><p class="stcj-page-subtitle">悬浮条与轮盘独立启用，已有按钮顺序及显隐设置完整保留。</p>
+      <dialog id="stcj-settings-window" data-stcj-settings data-console-mode="pro" data-sidebar-collapsed="false" class="stcj-settings-window" aria-labelledby="stcj-settings-title">
+        <div class="stcj-settings-window-header">
+          <div class="stcj-settings-brand">
+            <button type="button" id="stcj-sidebar-toggle" class="stcj-sidebar-toggle" aria-expanded="true" aria-controls="stcj-settings-sidebar" aria-label="收起侧边导航" title="收起/展开侧边导航 (窄屏自动转为顶部标签)">☰</button>
+            <span class="stcj-brand-glyph" aria-hidden="true">◉</span>
+            <div>
+              <h2 id="stcj-settings-title">Chat Jumper</h2>
+              <small>快捷轮盘与楼层导航控制台</small>
+            </div>
+          </div>
+          <div class="stcj-settings-header-tools">
+            <div class="stcj-console-mode-switch" role="group" aria-label="控制台显示密度">
+              <button type="button" data-console-mode-btn="simple" aria-pressed="false" title="精简展示常用核心设置">💡 简单模式</button>
+              <button type="button" data-console-mode-btn="pro" class="is-active" aria-pressed="true" title="展示全部高级微调参数">⚙️ 高级模式</button>
+            </div>
+            <button type="button" id="stcj-settings-close" aria-label="关闭设置" title="关闭设置 (Esc)">×</button>
+          </div>
+        </div>
+        <div class="stcj-settings-workspace">
+          <aside id="stcj-settings-sidebar" class="stcj-settings-sidebar">
+            <nav class="stcj-settings-nav" role="tablist" aria-label="设置分区">
+              <button type="button" role="tab" data-settings-page="triggers" aria-label="触发与安全" title="触发与安全"><span aria-hidden="true">◎</span><b>触发与安全</b></button>
+              <button type="button" role="tab" data-settings-page="appearance" aria-label="外观与形态" title="外观与形态"><span aria-hidden="true">◌</span><b>外观与形态</b></button>
+              <button type="button" role="tab" data-settings-page="actions" aria-label="扇区与动作" title="扇区与动作"><span aria-hidden="true">▤</span><b>扇区与动作</b></button>
+              <button type="button" role="tab" data-settings-page="toolbar" aria-label="悬浮条与导航" title="悬浮条与导航"><span aria-hidden="true">↕</span><b>悬浮条与导航</b></button>
+              <button type="button" role="tab" data-settings-page="schemes" aria-label="方案与备份" title="方案与备份"><span aria-hidden="true">▦</span><b>方案与备份</b></button>
+              <button type="button" role="tab" data-settings-page="about" aria-label="关于与致谢" title="关于与致谢"><span aria-hidden="true">ⓘ</span><b>关于与致谢</b></button>
+            </nav>
+            <div class="stcj-sidebar-footer">
+              <div class="stcj-sidebar-theme-box" role="group" aria-label="窗口主题快捷切换">
+                <button type="button" data-panel-theme-btn="host" title="跟随酒馆主题">🌓 跟随</button>
+                <button type="button" data-panel-theme-btn="light" title="清亮浅色主题">☀️ 浅色</button>
+                <button type="button" data-panel-theme-btn="dark" title="柔和深色主题">🌙 深色</button>
+              </div>
+              <div class="stcj-sidebar-meta">
+                <span class="stcj-version-pill">Config v2</span>
+                <small>ST / TT 双端兼容</small>
+              </div>
+            </div>
+          </aside>
+          <div class="stcj-settings-window-body"><section class="stcj-settings-page" data-stcj-page="toolbar" id="stcj-page-toolbar" hidden><h2>悬浮条与导航</h2><p class="stcj-page-subtitle">悬浮条与轮盘独立启用，已有按钮顺序及显隐设置完整保留。</p>
             <div class="stcj-settings-global-toggle">
               <button id="stcj-global-hide-btn" class="menu_button" title="点击一键隐藏 ST Chat Jumper 悬浮跳转条（不影响按钮显隐设置）">
                 一键隐藏悬浮条
@@ -151,7 +182,7 @@ export function createFeature({ state, dependencies }) {
                 </div>
                 <span id="stcj-size-value">${dependencies.formatRootScalePercent()}</span>
               </div>
-              <input id="stcj-size-slider" class="text_pole" type="range" min="${constants.MIN_SCALE * 100}" max="${constants.MAX_SCALE * 100}" step="${constants.SCALE_STEP * 100}" value="${dependencies.getRootScalePercent()}" />
+              <input id="stcj-size-slider" class="text_pole" type="range" min="${constants.MIN_SCALE * 100}" max="${constants.MAX_SCALE * 100}" step="${constants.SCALE_STEP * 100}" value="${dependencies.getRootScalePercent()}" aria-label="悬浮条缩放比例" />
               <div class="stcj-settings-size-scale" aria-hidden="true">
                 <span>50%</span><span>75%</span><span>100%</span><span>125%</span><span>150%</span>
               </div>
@@ -183,13 +214,38 @@ export function createFeature({ state, dependencies }) {
             <div id="stcj-settings-button-list" class="stcj-settings-list">
             </div>
           </section><div id="stcj-radial-settings-mount"></div>
-        </div></div><footer class="stcj-settings-footer"><p id="stcj-settings-save-state" role="status">自动保存 · 配置 v2</p><span>ST / TT</span></footer>
+        </div></div>
+        <footer class="stcj-settings-footer">
+          <p id="stcj-settings-save-state" role="status">自动保存 · 配置 v2</p>
+          <div class="stcj-footer-badges">
+            <span class="stcj-footer-kbd" aria-hidden="true">方向键切页 · Esc 关闭</span>
+            <span>ST / TT</span>
+          </div>
+        </footer>
       </dialog>
     `;
 
     document.body.insertAdjacentHTML('beforeend', html);
     const dialog = document.getElementById('stcj-settings-window');
     document.getElementById('stcj-settings-close').addEventListener('click', closeSettingsWindow);
+    const sidebarToggle = document.getElementById('stcj-sidebar-toggle');
+    sidebarToggle?.addEventListener('click', () => {
+      const nextCollapsed = dialog.dataset.sidebarCollapsed !== 'true';
+      dialog.dataset.sidebarCollapsed = String(nextCollapsed);
+      sidebarToggle.setAttribute('aria-expanded', String(!nextCollapsed));
+      sidebarToggle.setAttribute('aria-label', nextCollapsed ? '展开侧边导航' : '收起侧边导航');
+    });
+    dialog.querySelectorAll('[data-console-mode-btn]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.consoleModeBtn;
+        dialog.dataset.consoleMode = mode;
+        dialog.querySelectorAll('[data-console-mode-btn]').forEach(other => {
+          const active = other === btn;
+          other.classList.toggle('is-active', active);
+          other.setAttribute('aria-pressed', String(active));
+        });
+      });
+    });
     dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeSettingsWindow(); } });
     dialog.addEventListener('close', () => document.getElementById(PANEL_ID)?.focus({ preventScroll: true }));
     dependencies.mountRadialSettings(document.getElementById('stcj-radial-settings-mount'));

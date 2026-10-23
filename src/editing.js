@@ -190,16 +190,16 @@ export function createFeature({ state, dependencies }) {
 
   function attachQuickEditMonitor(mesEl) {
     if (!state.editing.quickEditState) return;
-    const state = state.editing.quickEditState;
+    const editState = state.editing.quickEditState;
     const ctx = dependencies.getHostContext();
     const eventTypes = dependencies.getHostEventTypes(ctx);
     const events = [eventTypes.MESSAGE_UPDATED, eventTypes.MESSAGE_DELETED, eventTypes.CHAT_CHANGED].filter(Boolean);
-    const check = () => { if (state.editing.quickEditState === state && !getCurrentEditTextarea()) clearQuickEditState(); };
+    const check = () => { if (state.editing.quickEditState === editState && !getCurrentEditTextarea()) clearQuickEditState(); };
     const observer = window.MutationObserver ? new MutationObserver(check) : null;
     observer?.observe(mesEl || dependencies.getChatContainer(), { childList: true, subtree: true });
     events.forEach((event) => ctx?.eventSource?.on?.(event, check));
     let detached = false;
-    state.detachMonitor = () => {
+    editState.detachMonitor = () => {
       if (detached) return;
       detached = true;
       observer?.disconnect();
@@ -368,16 +368,16 @@ export function createFeature({ state, dependencies }) {
     if (!state.editing.quickEditState && !existingEditor) return false;
     state.editing.quickEditBusy = true;
     try {
-      const state = state.editing.quickEditState;
-      if (state?.chatId && state.chatId !== dependencies.getCurrentChatId()) { clearQuickEditState(); return false; }
-      const mesEl = (state ? dependencies.getMessageElement(state.mesId) : null) || getEditingMessageElement();
+      const editState = state.editing.quickEditState;
+      if (editState?.chatId && editState.chatId !== dependencies.getCurrentChatId()) { clearQuickEditState(); return false; }
+      const mesEl = (editState ? dependencies.getMessageElement(editState.mesId) : null) || getEditingMessageElement();
       if (!mesEl) {
         clearQuickEditState();
         return false;
       }
 
-      const scrollEl = state?.scrollEl || dependencies.getChatScrollElement();
-      const restoreTop = state?.scrollTop;
+      const scrollEl = editState?.scrollEl || dependencies.getChatScrollElement();
+      const restoreTop = editState?.scrollTop;
       const editorClosed = waitForEditorClosed(mesEl, 2000);
 
       if (!clickMessageDoneButton(mesEl)) {
