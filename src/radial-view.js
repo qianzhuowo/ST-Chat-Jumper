@@ -2,10 +2,12 @@ import { normalizeRadialAppearance } from './radial-config.js';
 
 export const requiredServices = [];
 // Original browser renderer. Geometry is standard polar math, not a port of an upstream renderer.
-export function sectorGeometry(index, count, radius, innerRadius, gap = 3, rotation = 0) {
+export function sectorGeometry(index, count, radius, innerRadius, gap = 3, rotation = 0, arc = null) {
   if (!Number.isFinite(count) || count < 1) return { path: '', polygon: '', angle: 0 };
-  const step = 360 / count, space = Math.min(gap, step * .45);
-  const start = -90 + rotation + (index - .5) * step + space / 2;
+  const span = arc ? arc.span : 360;
+  const arcStart = arc ? arc.start : -90 + rotation - 180 / count;
+  const step = span / count, space = Math.min(gap, step * .45);
+  const start = arcStart + index * step + space / 2;
   const end = start + Math.min(359.95, step - space);
   const point = (angle, r) => { const a = angle * Math.PI / 180; return [radius + Math.cos(a) * r, radius + Math.sin(a) * r]; };
   const [a, b, c, d] = [point(start, radius - 2), point(end, radius - 2), point(end, innerRadius), point(start, innerRadius)];
@@ -14,7 +16,21 @@ export function sectorGeometry(index, count, radius, innerRadius, gap = 3, rotat
   const points = [], samples = Math.max(5, Math.ceil((end - start) / 5));
   for (let i = 0; i <= samples; i++) points.push(point(start + (end - start) * i / samples, radius));
   for (let i = samples; i >= 0; i--) points.push(point(start + (end - start) * i / samples, innerRadius));
-  return { path, polygon: points.map(p => p.map(n => `${(n / radius * 50).toFixed(3)}%`).join(' ')).join(','), angle: -90 + rotation + index * step };
+  return { path, polygon: points.map(p => p.map(n => `${(n / radius * 50).toFixed(3)}%`).join(' ')).join(','), angle: arcStart + (index + .5) * step };
+}
+// StarPie model: the child tier extends straight out of its parent cell and evenly
+// subdivides exactly the parent's angular span; anything outside that span is a miss.
+export function resolveSubringArc(mainCount, parentIndex, childCount, mainRotation = 0) {
+  if (!Number.isFinite(mainCount) || mainCount < 1 || !(parentIndex >= 0) || !Number.isFinite(childCount) || childCount < 1) return null;
+  const span = 360 / mainCount;
+  const center = -90 + mainRotation + parentIndex * span;
+  return { center, span, start: center - span / 2 };
+}
+export function arcHitIndex(angleDeg, arc, count) {
+  if (!arc || !count) return -1;
+  const relative = ((angleDeg - arc.start) % 360 + 360) % 360;
+  if (relative >= arc.span) return -1;
+  return Math.min(count - 1, Math.floor(relative / (arc.span / count)));
 }
 export function resolveWheelAppearance(config, menu, radius) {
   const appearance = normalizeRadialAppearance(menu?.appearance || config.appearance);
@@ -30,14 +46,9 @@ export function resolveSubringRotation(mainCount, parentIndex, mainRotation = 0,
 }
 
 export function resolveSubringBounds(radius, innerRadius, subAppearance, preview = false) {
-  const gapPx = preview ? 5 : 7;
-  const subScale = (Number(subAppearance?.scale) || 100) / 100;
-  const primaryBand = Math.max(20, radius - innerRadius);
-  const rawBand = Math.round(primaryBand * (preview ? 0.68 : 0.82) * subScale);
-  const subInner = Math.round(radius + gapPx);
-  const subOuter = preview
-    ? Math.max(subInner + 28, Math.min(164, subInner + rawBand))
-    : Math.max(subInner + 36, subInner + rawBand);
+  // One proportional geometry for runtime and preview; child scale cannot change it.
+  const subInner = radius * 1.04;
+  const subOuter = radius * 1.55;
   return { subInner, subOuter };
 }
 const symbols = { prev: '↑', next: '↓', recent1: '⇥', recent2: 'Ⅱ', recent3: 'Ⅲ', quickEdit: '✎', quickDelete: '×', quickPage: '›', quickPageLeft: '‹', showRange: '#', togglePin: '◇', toggleFavPanel: '▤', openFavoritesManager: '▦', currentHead: '↥', currentTail: '↧', toggleCollapse: '−', toggleOrientation: '↔', rangePrev: '‹', rangeNext: '›', resetRange: '↺' };
@@ -58,14 +69,18 @@ function applyWheelVariables(target, a) {
   for (const [key, value] of Object.entries(variables)) target.style.setProperty(`--wheel-${key}`, value);
 }
 
-function buildRingButtons({ container, items, count, outerRadius, innerRadius, appearance, className, indexAttr, tier, extraIndexAttr, onClick, onHover, parentOpenIndex = -1 }) {
+function buildRingButtons({ container, items, count, outerRadius, innerRadius, appearance, className, indexAttr, tier, extraIndexAttr, onClick, onHover, parentOpenIndex = -1, arc = null }) {
   const gap = appearance.shape === 'solid' ? 0 : appearance.gap + (appearance.shape === 'petals' ? 4 : 0);
+  const arcFraction = arc ? arc.span / 360 : 1;
   return items.map((item, index) => {
-    const geometry = sectorGeometry(index, count, outerRadius, innerRadius, gap, appearance.rotation);
+    const geometry = sectorGeometry(index, count, outerRadius, innerRadius, gap, appearance.rotation, arc);
+    const distance = (outerRadius + innerRadius) / 2;
+    // Narrow child cells keep the icon and expose the label through title/aria instead of clipping it.
+    const compact = tier === 'sub' && appearance.showIcons && 2 * Math.PI * distance * arcFraction / Math.max(1, count) < 46;
     const isEmpty = !item.action && !item.submenu;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `${className}${index === parentOpenIndex ? ' is-submenu-open' : ''}${isEmpty ? ' is-empty-sector' : ''}`;
+    button.className = `${className}${index === parentOpenIndex ? ' is-submenu-open' : ''}${isEmpty ? ' is-empty-sector' : ''}${compact ? ' is-compact' : ''}`;
     button.title = item.label;
     button.setAttribute('role', 'menuitem');
     button.setAttribute('aria-label', `${index + 1}. ${item.label}${item.submenu ? '，子轮盘' : ''}`);
@@ -82,10 +97,10 @@ function buildRingButtons({ container, items, count, outerRadius, innerRadius, a
     button.append(svg);
     const content = document.createElement('span');
     content.className = 'stcj-sector-content';
-    const distance = (outerRadius + innerRadius) / 2, angle = geometry.angle * Math.PI / 180;
+    const angle = geometry.angle * Math.PI / 180;
     content.style.left = `${outerRadius + Math.cos(angle) * distance}px`;
     content.style.top = `${outerRadius + Math.sin(angle) * distance}px`;
-    content.style.width = `${Math.max(32, Math.min((outerRadius - innerRadius) * (tier === 'sub' ? 2.1 : 1.35), 2 * Math.PI * distance / Math.max(1, count) * .73))}px`;
+    content.style.width = `${Math.max(32, Math.min((outerRadius - innerRadius) * (tier === 'sub' ? 2.1 : 1.35), 2 * Math.PI * distance * arcFraction / Math.max(1, count) * .73))}px`;
     if (item.color) content.style.color = item.color;
     if (appearance.showIcons) {
       const icon = document.createElement('span');
@@ -134,7 +149,8 @@ export function createFeature() {
     const a = normalizeRadialAppearance(appearance);
     const hasSubmenu = !!(submenu && Array.isArray(submenu.items) && submenu.items.length > 0);
     const subA = hasSubmenu ? normalizeRadialAppearance(subAppearance || submenu.appearance || appearance) : null;
-    if (subA && parentIndex >= 0) subA.rotation = resolveSubringRotation(menu.items.length, parentIndex, a.rotation, subA.rotation);
+    const subArc = subA && parentIndex >= 0 ? resolveSubringArc(menu.items.length, parentIndex, submenu.items.length, a.rotation) : null;
+    if (subA && parentIndex >= 0 && !subArc) subA.rotation = resolveSubringRotation(menu.items.length, parentIndex, a.rotation, subA.rotation);
     const inner = radius * a.innerRatio / 100;
     const bounds = hasSubmenu ? resolveSubringBounds(radius, inner, subA, preview) : null;
 
@@ -149,8 +165,9 @@ export function createFeature() {
     let subringEl = null;
     if (hasSubmenu) {
       subringEl = document.createElement('div');
-      subringEl.className = `stcj-radial-subring stcj-wheel-${subA.shape}`;
+      subringEl.className = `stcj-radial-subring stcj-wheel-${subA.shape}${subArc ? ' is-fan' : ''}`;
       subringEl.dataset.submenuId = submenu.id;
+      subringEl.dataset.layout = subArc ? 'fan' : 'ring';
       subringEl.setAttribute('role', 'group');
       subringEl.setAttribute('aria-label', `${submenu.label} 二级轮盘`);
       subringEl.style.width = subringEl.style.height = `${bounds.subOuter * 2}px`;
@@ -171,16 +188,8 @@ export function createFeature() {
         tier: 'sub',
         onClick: onSubChoose || onChoose,
         onHover: onSubHover,
+        arc: subArc,
       });
-      const connector = document.createElement('div');
-      connector.className = 'stcj-subring-connector';
-      const connectorAngle = (-90 + a.rotation + parentIndex * (360 / Math.max(1, menu.items.length))) * Math.PI / 180;
-      const connectorLength = Math.max(12, bounds.subInner - radius + 8);
-      connector.style.width = `${connectorLength}px`;
-      connector.style.transform = `translate(-50%, -50%) rotate(${connectorAngle}rad)`;
-      connector.style.left = `${radius + Math.cos(connectorAngle) * (radius + connectorLength / 2)}px`;
-      connector.style.top = `${radius + Math.sin(connectorAngle) * (radius + connectorLength / 2)}px`;
-      ring.append(connector);
       ring.append(subringEl);
     }
 
@@ -232,7 +241,7 @@ export function createFeature() {
     }
     setSelected(selected);
     setSubSelected(subSelected);
-    return { element: ring, buttons, subButtons, subring: subringEl, center, setSelected, setSubSelected, subringBounds: bounds };
+    return { element: ring, buttons, subButtons, subring: subringEl, center, setSelected, setSubSelected, subringBounds: bounds, subArc, subRotation: subA ? subA.rotation : 0 };
   }
   return { createRadialView };
 }

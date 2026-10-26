@@ -1,6 +1,14 @@
 import { EXT_SETTINGS_KEY } from './constants.js';
 
 export const requiredServices = [];
+export const RADIAL_CONFIG_VERSION = 3;
+// Only this dedicated namespace is migrated; toolbar/favorites/host data stay intact.
+export function migrateRadialSettings(extensionSettings) {
+  const settings = extensionSettings?.[EXT_SETTINGS_KEY];
+  if (!settings || settings.radial?.version === RADIAL_CONFIG_VERSION) return false;
+  settings.radial = defaultRadialConfig();
+  return true;
+}
 const number = (value, fallback, min, max) => typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
 const bool = (value, fallback) => typeof value === 'boolean' ? value : fallback;
 export const RADIAL_THEMES = {
@@ -28,7 +36,7 @@ export function normalizeRadialAppearance(raw) {
 const slot = (id, label) => ({ label, action: { type: 'plugin', id } });
 export function defaultRadialConfig() {
   return {
-    version: 2, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
+    version: RADIAL_CONFIG_VERSION, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
     keyboardEnabled: true, key: 'j', keyModifier: 'altShift', touchMode: 'off', scope: 'chat',
     threshold: 24, longPress: 550, tapCount: 2, tapInterval: 320, radius: 120,
     deadZone: 28, cancelDistance: 240, submenuDelay: 400,
@@ -79,7 +87,11 @@ export function normalizeRadialConfig(raw) {
 export function createFeature() {
   let fallback = defaultRadialConfig();
   function getRadialConfig() {
-    try { return normalizeRadialConfig(window.SillyTavern?.getContext?.()?.extensionSettings?.[EXT_SETTINGS_KEY]?.radial ?? fallback); }
+    try {
+      const ctx = window.SillyTavern?.getContext?.();
+      if (migrateRadialSettings(ctx?.extensionSettings)) ctx.saveSettingsDebounced?.();
+      return normalizeRadialConfig(ctx?.extensionSettings?.[EXT_SETTINGS_KEY]?.radial ?? fallback);
+    }
     catch { return normalizeRadialConfig(fallback); }
   }
   function saveRadialConfig(config) {

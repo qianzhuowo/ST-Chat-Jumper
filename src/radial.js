@@ -1,4 +1,4 @@
-import { resolveSubringBounds, resolveWheelAppearance, resolveSubringRotation } from './radial-view.js';
+import { resolveSubringBounds, resolveWheelAppearance, arcHitIndex } from './radial-view.js';
 import { normalizeRadialAppearance } from './radial-config.js';
 export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView'];
 
@@ -67,9 +67,6 @@ export function createFeature({ dependencies }) {
     a.center = metrics.center;
     a.appearance = resolveWheelAppearance(a.config, a.menu, a.radius);
     a.subAppearance = a.submenu ? resolveWheelAppearance(a.config, a.submenu, a.radius) : null;
-    if (a.subAppearance && a.lockedParentIndex >= 0) {
-      a.subAppearance.rotation = resolveSubringRotation(a.menu.items.length, a.lockedParentIndex, a.appearance.rotation, a.subAppearance.rotation);
-    }
     a.overlay.replaceChildren();
     a.view = dependencies.createRadialView({
       menu: a.menu,
@@ -225,9 +222,12 @@ export function createFeature({ dependencies }) {
           a.selected = a.lockedParentIndex;
           a.view.setSelected(a.selected);
         }
-        const rawSub = distance <= bounds.subOuter
-          ? radialHitTest(x, y, a.center, a.submenu.items.length, bounds.subInner, bounds.subOuter, a.subAppearance.rotation)
-          : -1;
+        const subArc = a.view.subArc;
+        const rawSub = distance > bounds.subOuter
+          ? -1
+          : subArc
+            ? arcHitIndex(Math.atan2(y - a.center.y, x - a.center.x) * 180 / Math.PI, subArc, a.submenu.items.length)
+            : radialHitTest(x, y, a.center, a.submenu.items.length, bounds.subInner, bounds.subOuter, a.view.subRotation ?? a.subAppearance.rotation);
         const subItem = rawSub >= 0 ? a.submenu.items[rawSub] : null;
         // Empty secondary area clears hit to prevent mis-triggering.
         const nextSub = subItem?.action ? rawSub : -1;

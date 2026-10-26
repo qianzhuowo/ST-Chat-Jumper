@@ -34,6 +34,7 @@ playwright/.cache/
 /tests/*
 !/tests/*.test.cjs
 !/tests/module-harness.cjs
+!/tests/radial-state-guard.cjs
 
 # Local execution records, not maintained feature/developer documentation.
 /docs/*-validation.md

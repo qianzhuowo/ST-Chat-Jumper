@@ -105,6 +105,27 @@ test('secondary ring rotation aligns its first sector with the owning primary se
   assert.equal(viewModule.resolveSubringRotation(8, 2, 0, 0), 90);
   assert.equal(viewModule.resolveSubringRotation(4, 1, 20, 5), 115);
 });
+test('secondary tier extends straight out of its parent cell and subdivides exactly the parent span (StarPie model)', () => {
+  const arc = viewModule.resolveSubringArc(8, 2, 3, 0);
+  assert.deepEqual(arc, { center: 0, span: 45, start: -22.5 });
+  // Child count never widens or narrows the tier: it always matches the parent sector.
+  assert.equal(viewModule.resolveSubringArc(4, 0, 1).span, 90);
+  assert.equal(viewModule.resolveSubringArc(4, 0, 12).span, 90);
+  assert.equal(viewModule.resolveSubringArc(8, -1, 3), null);
+  assert.equal(viewModule.resolveSubringArc(4, 1, 2, 20).center, 20);
+  assert.equal(viewModule.arcHitIndex(-20, arc, 3), 0);
+  assert.equal(viewModule.arcHitIndex(0, arc, 3), 1);
+  assert.equal(viewModule.arcHitIndex(22, arc, 3), 2);
+  assert.equal(viewModule.arcHitIndex(23, arc, 3), -1);
+  assert.equal(viewModule.arcHitIndex(-23, arc, 3), -1);
+  // Wrap-around across -180/180 and agreement between painted sector centres and hit testing.
+  const west = viewModule.resolveSubringArc(4, 3, 2);
+  assert.equal(viewModule.arcHitIndex(170, west, 2), 0);
+  assert.equal(viewModule.arcHitIndex(-170, west, 2), 1);
+  for (let i = 0; i < 3; i++) assert.equal(viewModule.arcHitIndex(viewModule.sectorGeometry(i, 3, 200, 150, 3, 0, arc).angle, arc, 3), i);
+  // Full-ring geometry is unchanged when no arc is supplied.
+  assert.equal(viewModule.sectorGeometry(1, 4, 100, 40, 3, 0).angle, 0);
+});
 
 
 test('radial defaults are opt-in, normalization is bounded, cycle-safe and immutable', () => {
@@ -180,10 +201,10 @@ test('registry dispatches without toolbar DOM and fails closed for unknown futur
   await s.executeShortcutAction({ type: 'host', id: 'future' }); assert.equal(calls.at(-1), 'future'); unregister(); assert.equal(await s.executeShortcutAction({ type: 'host', id: 'future' }), false);
 });
 
-test('v1 migrates to v2 without losing gesture settings, slot order or future actions', () => {
+test('normalizer validates shape independently of persisted schema migration', () => {
   const old = { version: 1, enabled: true, touchMode: 'multiTap', radius: 100, menus: [{ id: 'main', label: 'Old', items: [{ label: 'One', action: { type: 'future', id: 'card' } }, { label: 'Two', submenu: 'child' }] }, { id: 'child', label: 'Child', items: [{ label: 'Three', action: { type: 'plugin', id: 'next' } }] }] };
   const original = JSON.stringify(old), next = configModule.normalizeRadialConfig(old);
-  assert.equal(next.version, 2); assert.equal(next.enabled, true); assert.equal(next.touchMode, 'multiTap'); assert.equal(next.radius, 100);
+  assert.equal(next.version, 3); assert.equal(next.enabled, true); assert.equal(next.touchMode, 'multiTap'); assert.equal(next.radius, 100);
   assert.deepEqual(next.menus[0].items.map(i => i.label), ['One', 'Two']); assert.equal(next.menus[0].items[0].action.type, 'future'); assert.equal(next.menus[0].items[1].submenu, 'child'); assert.equal(next.menus[1].appearance, null);
   assert.equal(next.appearance.theme, 'graphite'); assert.deepEqual(next.schemes, []); assert.equal(JSON.stringify(old), original);
 });
@@ -271,18 +292,24 @@ test('co-screen submenu renders primary and secondary rings together, locks pare
   assert.equal(subItems.length, 4);
   assert.equal(primaryItems[0].classes.has('is-submenu-open'), true);
 
-  // Move into outer secondary ring north (radius ~ 155px -> clientY = 145)
-  d.emit('pointermove', { clientX: 400, clientY: 145 });
+  // StarPie model: 4 children subdivide the parent's own 90deg span (north), i.e. -135deg..-45deg, 22.5deg each.
+  assert.equal(subring.dataset.layout, 'fan');
+  const at = deg => ({ clientX: 400 + Math.cos(deg * Math.PI / 180) * 155, clientY: 300 + Math.sin(deg * Math.PI / 180) * 155 });
+  // Child 0 is the counter-clockwise edge of the parent cell.
+  d.emit('pointermove', at(-124));
   assert.equal(subItems[0].classes.has('is-selected'), true);
 
-  // Move angularly in outer secondary ring to East (empty secondary sector 1: clientX = 555, clientY = 300)
-  // Parent sector 0 remains locked (submenu stays open), and empty secondary sector clears selection to prevent mis-trigger
+  // Empty child 1 clears the hit, and so does the outer band beyond the parent span (east), while parent stays locked.
+  d.emit('pointermove', at(-101));
+  assert.equal(subItems.some(n => n.classes.has('is-selected')), false, 'empty secondary sector clears hit selection');
+  d.emit('pointermove', at(-150));
+  assert.equal(subItems.some(n => n.classes.has('is-selected')), false, 'just outside the parent span never selects a child');
   d.emit('pointermove', { clientX: 555, clientY: 300 });
   assert.equal(ring.all().some(n => n.classes?.has('stcj-radial-subring')), true, 'parent submenu stays locked while moving in outer subring');
-  assert.equal(subItems.some(n => n.classes.has('is-selected')), false, 'empty secondary sector clears hit selection');
+  assert.equal(subItems.some(n => n.classes.has('is-selected')), false, 'outside the parent span never selects a child');
 
-  // Move in outer secondary ring to South (sector 2: clientX = 400, clientY = 455) -> selects secondary sector 2 while parent 0 remains locked
-  d.emit('pointermove', { clientX: 400, clientY: 455 });
+  // Child 2 sits just clockwise of the parent direction.
+  d.emit('pointermove', at(-79));
   assert.equal(subItems[2].classes.has('is-selected'), true);
   assert.equal(primaryItems[0].classes.has('is-submenu-open'), true);
 
@@ -299,11 +326,11 @@ test('co-screen submenu renders primary and secondary rings together, locks pare
   d.emit('pointerup', { clientX: 400, clientY: 370 });
   assert.equal(r.executed.length, 0, 'releasing on empty sector never executes an action');
 
-  // Continuous drag from primary sector 0 directly into secondary outer ring South (sector 2) and release -> executes secondary action in one gesture
+  // Continuous drag from primary sector 0 straight outward into the fan's clockwise child (sector 2) and release -> executes secondary action in one gesture
   d.emit('pointerdown', { clientX: 400, clientY: 300 });
   d.emit('pointermove', { clientX: 400, clientY: 220 });
-  d.emit('pointermove', { clientX: 400, clientY: 455 });
-  d.emit('pointerup', { clientX: 400, clientY: 455 });
+  d.emit('pointermove', at(-79));
+  d.emit('pointerup', at(-79));
   assert.equal(r.executed.length, 1);
   assert.equal(r.executed[0].id, 'showRange');
 
@@ -447,4 +474,36 @@ test('sidebar collapse toggle syncs aria-expanded and retains accessible names f
   assert.match(cssSource, /@media\(max-width:600px\)/);
   assert.match(cssSource, /\.stcj-radial-subring\b/);
   assert.match(cssSource, /\.stcj-inline-subwheel-card\b/);
+});
+
+
+test('v3 migration resets only radial including old schemes and runs once', () => {
+  for (const version of [undefined, 1, 2]) {
+    const settings = { 'ST-Chat-Jumper': { toolbar: { order: ['prev'] }, favorites: ['keep'], other: 42, radial: { version, enabled: true, schemes: [{ id: 'legacy' }], menus: [] } }, unrelated: { token: 'keep' } };
+    const toolbar = settings['ST-Chat-Jumper'].toolbar;
+    const before = structuredClone(settings); delete before['ST-Chat-Jumper'].radial;
+    assert.equal(configModule.migrateRadialSettings(settings), true);
+    assert.equal(settings['ST-Chat-Jumper'].radial.version, 3);
+    assert.deepEqual(settings['ST-Chat-Jumper'].radial.schemes, []);
+    assert.equal(settings['ST-Chat-Jumper'].radial.enabled, false);
+    const radial = settings['ST-Chat-Jumper'].radial; radial.enabled = true;
+    assert.equal(configModule.migrateRadialSettings(settings), false);
+    assert.equal(settings['ST-Chat-Jumper'].radial, radial);
+    assert.equal(radial.enabled, true);
+    assert.equal(settings['ST-Chat-Jumper'].toolbar, toolbar);
+    const after = structuredClone(settings); delete after['ST-Chat-Jumper'].radial;
+    assert.deepEqual(after, before);
+  }
+});
+test('runtime and preview child bounds share 1.04R to 1.55R independent of child scale', () => {
+  for (const radius of [56, 80, 120, 200, 260]) for (const scale of [70, 100, 130]) {
+    const expected = { subInner: radius * 1.04, subOuter: radius * 1.55 };
+    assert.deepEqual(viewModule.resolveSubringBounds(radius, radius * .46, { scale }, false), expected);
+    assert.deepEqual(viewModule.resolveSubringBounds(radius, radius * .65, { scale }, true), expected);
+  }
+});
+test('legacy JSON imports are gated on the current schema', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/radial-settings.js'), 'utf8');
+  assert.ok(source.includes('raw.version !== RADIAL_CONFIG_VERSION'));
+  assert.ok(!source.includes('同页二级起始旋转'));
 });

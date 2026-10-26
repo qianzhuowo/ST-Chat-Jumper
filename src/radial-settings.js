@@ -1,5 +1,5 @@
 import { resolveWheelAppearance } from './radial-view.js';
-import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_THEMES } from './radial-config.js';
+import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
 
 export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'openRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode'];
 
@@ -301,7 +301,10 @@ export function createFeature({ dependencies }) {
       for (const [title, key] of [['扇区底色', 'surface'], ['选中填色', 'highlight'], ['高亮描边', 'accent'], ['扇区边框', 'border'], ['文字颜色', 'text'], ['中心核颜色', 'center']]) styleField(palette, title, key, { type: 'color', live: true, proOnly: true });
       const geometry = card(appearanceControls, '几何与文字');
       field(geometry, '基础半径 · px', { type: 'range', value: config.radius, min: 80, max: 200, live: true, onChange: v => { config.radius = v; config.cancelDistance = Math.max(config.cancelDistance, v + 40); save(); } });
-      for (const [title, key, min, max, proOnly] of [['独立尺寸 · %', 'scale', 70, 130, false], ['中心留白 · %', 'innerRatio', 25, 65, true], ['扇区间隙 · °', 'gap', 0, 16, true], ['起始旋转 · °', 'rotation', -180, 180, true], ['文字大小 · px', 'fontSize', 10, 20, false], ['背景不透明度 · %', 'opacity', 45, 100, true], ['选中光晕 · px', 'glow', 0, 30, true]]) styleField(geometry, title, key, { type: 'range', min, max, live: true, proOnly });
+      for (const [title, key, min, max, proOnly] of [['独立尺寸 · %', 'scale', 70, 130, false], ['中心留白 · %', 'innerRatio', 25, 65, true], ['扇区间隙 · °', 'gap', 0, 16, true], ['起始旋转 · °', 'rotation', -180, 180, true], ['文字大小 · px', 'fontSize', 10, 20, false], ['背景不透明度 · %', 'opacity', 45, 100, true], ['选中光晕 · px', 'glow', 0, 30, true]]) {
+        if (menu.id !== 'main' && ['rotation', 'scale', 'innerRatio'].includes(key)) continue;
+        styleField(geometry, title, key, { type: 'range', min, max, live: true, proOnly });
+      }
       styleField(geometry, '显示图标', 'showIcons', { type: 'checkbox' }); styleField(geometry, '显示标签', 'showLabels', { type: 'checkbox' });
       const centerInput = styleField(geometry, '中心核符号', 'centerSymbol', { type: 'text', hint: '仅文本符号，不加载图片或外部字体。', proOnly: true }); centerInput.maxLength = 6;
       button(geometry, '重置当前外观', () => { recordSnapshot('重置当前外观'); if (menu.id === 'main') { config.appearance = defaultRadialAppearance(); menu.appearance = null; } else menu.appearance = defaultRadialAppearance(); save(); renderAppearance(); renderEditor(); });
@@ -374,7 +377,7 @@ export function createFeature({ dependencies }) {
       }
       const subAppBox = element('div', 'stcj-inline-appearance-box'); subAppBox.dataset.inlineSubAppearance = 'true';
       subAppBox.append(element('h4', 'stcj-inline-subtitle', `🎨 ${sub.label} · 独立外观（同页编辑）`));
-      field(subAppBox, '启用二级独立外观', { type: 'checkbox', value: !!sub.appearance, aria: '同页独立二级外观', hint: '关闭时继承一级主轮盘外观；开启后可为该二级子轮盘单独定制主题、形态与尺寸。', onChange: v => { recordSnapshot('切换二级独立外观'); sub.appearance = v ? copy(config.appearance) : null; save(); renderEditor(); renderAppearance(); } });
+      field(subAppBox, '启用二级独立外观', { type: 'checkbox', value: !!sub.appearance, aria: '同页独立二级外观', hint: '关闭时继承一级主轮盘外观；开启后可为该二级子轮盘单独定制主题、形态与文字（半径及角度严格跟随父扇区）。', onChange: v => { recordSnapshot('切换二级独立外观'); sub.appearance = v ? copy(config.appearance) : null; save(); renderEditor(); renderAppearance(); } });
       if (sub.appearance) {
         const subA = appearance(sub);
         field(subAppBox, '二级配色方案', { choices: Object.entries(RADIAL_THEMES).map(([id, t]) => [id, t.label]), value: subA.theme, aria: '同页二级配色方案', onChange: v => { recordSnapshot('切换二级配色方案'); const preset = defaultRadialAppearance(v); for (const key of ['theme', 'surface', 'highlight', 'text', 'border', 'accent', 'center']) sub.appearance[key] = preset[key]; save(); renderEditor(); renderAppearance(); } });
@@ -382,7 +385,7 @@ export function createFeature({ dependencies }) {
         for (const [title, key, ariaLabel] of [['二级扇区底色', 'surface', '同页二级扇区底色'], ['二级选中填色', 'highlight', '同页二级选中填色'], ['二级高亮描边', 'accent', '同页二级高亮描边'], ['二级文字颜色', 'text', '同页二级文字颜色']]) {
           field(subAppBox, title, { type: 'color', value: subA[key], aria: ariaLabel, live: true, onChange: v => { sub.appearance[key] = v; Object.assign(sub.appearance, normalizeRadialAppearance(sub.appearance)); save(); renderAppearance(); } });
         }
-        for (const [title, key, min, max, ariaLabel] of [['二级独立尺寸 · %', 'scale', 70, 130, '同页二级独立尺寸'], ['二级扇区间隙 · °', 'gap', 0, 16, '同页二级扇区间隙'], ['二级起始旋转 · °', 'rotation', -180, 180, '同页二级起始旋转'], ['二级文字大小 · px', 'fontSize', 10, 20, '同页二级文字大小']]) {
+        for (const [title, key, min, max, ariaLabel] of [['二级扇区间隙 · °', 'gap', 0, 16, '同页二级扇区间隙'], ['二级文字大小 · px', 'fontSize', 10, 20, '同页二级文字大小']]) {
           field(subAppBox, title, { type: 'range', min, max, value: subA[key], aria: ariaLabel, live: true, onChange: v => { sub.appearance[key] = v; Object.assign(sub.appearance, normalizeRadialAppearance(sub.appearance)); save(); renderAppearance(); } });
         }
         const subAppTools = element('div', 'stcj-editor-tools');
@@ -502,7 +505,7 @@ export function createFeature({ dependencies }) {
       try {
         if (json.value.length > 1000000) throw new Error('配置超过100万字符上限');
         const raw = JSON.parse(json.value);
-        if (!raw || !Array.isArray(raw.menus) || (raw.version && raw.version > 2)) throw new Error('请提供支持的 v1 / v2 轮盘配置');
+        if (!raw || !Array.isArray(raw.menus) || raw.version !== RADIAL_CONFIG_VERSION) throw new Error('仅支持 v3 轮盘配置；旧内部测试配置已停用');
         const next = normalizeRadialConfig(raw);
         for (const key of includeTriggers ? Object.keys(next) : ['menus', 'appearance', 'radius', 'schemes', 'panelTheme']) config[key] = next[key];
         config.cancelDistance = Math.max(config.cancelDistance, config.radius + 40); undo.clear(); menuId = 'main';
