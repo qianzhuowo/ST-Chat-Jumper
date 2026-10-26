@@ -93,6 +93,20 @@ function runtime(overrides = {}) {
   services.installRadialGestures();
   return { document, window, config, services, executed, opened: () => document.body.children.length > 0 };
 }
+test('keyboard defaults avoid browser single-modifier shortcuts and accept safe combinations', () => {
+  const defaults = configModule.defaultRadialConfig();
+  assert.equal(defaults.keyModifier, 'altShift');
+  assert.equal(configModule.normalizeRadialConfig({ keyModifier: 'ctrlShift' }).keyModifier, 'ctrlShift');
+  assert.equal(configModule.normalizeRadialConfig({ keyModifier: 'meta' }).keyModifier, defaults.keyModifier);
+});
+
+test('secondary ring rotation aligns its first sector with the owning primary sector', () => {
+  assert.equal(viewModule.resolveSubringRotation(8, 0, 0, 0), 0);
+  assert.equal(viewModule.resolveSubringRotation(8, 2, 0, 0), 90);
+  assert.equal(viewModule.resolveSubringRotation(4, 1, 20, 5), 115);
+});
+
+
 test('radial defaults are opt-in, normalization is bounded, cycle-safe and immutable', () => {
   const defaults = configModule.defaultRadialConfig(); assert.equal(defaults.enabled, false); assert.equal(defaults.mouseEnabled, false); assert.equal(defaults.touchMode, 'off');
   const raw = { enabled: 'true', radius: Infinity, cancelDistance: 20, deadZone: 900, threshold: -3, key: '<script>', menus: [{ id: 'main', items: [{ submenu: 'main' }, { submenu: 'child' }] }, { id: 'child', items: [{ submenu: 'main' }, { action: { type: 'future', id: 'command' } }] }, { id: 'child' }] };
@@ -132,7 +146,7 @@ test('input exclusion, center/outer/Escape/scroll/blur/cancel cleanup never exec
 });
 test('keyboard invocation ignores text inputs, supports click-mode selection and cancellation', () => {
   const r = runtime(); r.document.emit('keydown', { key: 'j', target: inputTarget }); assert.equal(r.opened(), false);
-  r.document.emit('keydown', { key: 'j' }); assert.equal(r.opened(), true);
+  r.document.emit('keydown', { key: 'j', altKey: true, shiftKey: true }); assert.equal(r.opened(), true);
   r.document.emit('keydown', { key: 'ArrowRight' }); r.document.emit('keydown', { key: 'Enter' }); assert.equal(r.executed[0].id, 'prev'); assert.equal(r.opened(), false); r.services.destroyRadial();
 });
 test('submenu release enters a separately configured wheel, never executes a parent action', () => {

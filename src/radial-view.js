@@ -22,6 +22,13 @@ export function resolveWheelAppearance(config, menu, radius) {
   appearance.innerRatio = Math.max(appearance.innerRatio, Math.min(65, Math.round((Number(config.deadZone) || 0) / Math.max(1, radius) * 100)));
   return appearance;
 }
+export function resolveSubringRotation(mainCount, parentIndex, mainRotation = 0, subRotation = 0) {
+  if (!Number.isFinite(mainCount) || mainCount < 1 || parentIndex < 0) return subRotation;
+  // Keep the first child sector visually aligned with its owning primary sector.
+  const parentCenter = -90 + mainRotation + parentIndex * (360 / mainCount);
+  return subRotation + parentCenter + 90;
+}
+
 export function resolveSubringBounds(radius, innerRadius, subAppearance, preview = false) {
   const gapPx = preview ? 5 : 7;
   const subScale = (Number(subAppearance?.scale) || 100) / 100;
@@ -127,6 +134,7 @@ export function createFeature() {
     const a = normalizeRadialAppearance(appearance);
     const hasSubmenu = !!(submenu && Array.isArray(submenu.items) && submenu.items.length > 0);
     const subA = hasSubmenu ? normalizeRadialAppearance(subAppearance || submenu.appearance || appearance) : null;
+    if (subA && parentIndex >= 0) subA.rotation = resolveSubringRotation(menu.items.length, parentIndex, a.rotation, subA.rotation);
     const inner = radius * a.innerRatio / 100;
     const bounds = hasSubmenu ? resolveSubringBounds(radius, inner, subA, preview) : null;
 
@@ -164,6 +172,15 @@ export function createFeature() {
         onClick: onSubChoose || onChoose,
         onHover: onSubHover,
       });
+      const connector = document.createElement('div');
+      connector.className = 'stcj-subring-connector';
+      const connectorAngle = (-90 + a.rotation + parentIndex * (360 / Math.max(1, menu.items.length))) * Math.PI / 180;
+      const connectorLength = Math.max(12, bounds.subInner - radius + 8);
+      connector.style.width = `${connectorLength}px`;
+      connector.style.transform = `translate(-50%, -50%) rotate(${connectorAngle}rad)`;
+      connector.style.left = `${radius + Math.cos(connectorAngle) * (radius + connectorLength / 2)}px`;
+      connector.style.top = `${radius + Math.sin(connectorAngle) * (radius + connectorLength / 2)}px`;
+      ring.append(connector);
       ring.append(subringEl);
     }
 

@@ -29,7 +29,7 @@ const slot = (id, label) => ({ label, action: { type: 'plugin', id } });
 export function defaultRadialConfig() {
   return {
     version: 2, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
-    keyboardEnabled: true, key: 'j', keyModifier: 'alt', touchMode: 'off', scope: 'chat',
+    keyboardEnabled: true, key: 'j', keyModifier: 'altShift', touchMode: 'off', scope: 'chat',
     threshold: 24, longPress: 550, tapCount: 2, tapInterval: 320, radius: 120,
     deadZone: 28, cancelDistance: 240, submenuDelay: 400,
     menus: [{ id: 'main', label: '主轮盘', items: [slot('prev', '上一楼'), slot('next', '下一楼'), slot('recent1', '最新楼'), slot('quickEdit', '快速编辑'), slot('showRange', '跳转/区间'), { label: '收藏', submenu: 'favorites' }] },
@@ -41,7 +41,7 @@ export function normalizeRadialConfig(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const result = { ...d, appearance: normalizeRadialAppearance(r.appearance) };
   for (const key of ['enabled', 'mouseEnabled', 'keyboardEnabled']) result[key] = bool(r[key], d[key]);
-  for (const [key, values] of Object.entries({ panelTheme: ['host', 'light', 'dark'], modifier: ['alt', 'ctrl', 'shift', 'none'], keyModifier: ['alt', 'ctrl', 'shift'], touchMode: ['off', 'longPress', 'multiTap'], scope: ['chat', 'page'] })) {
+  for (const [key, values] of Object.entries({ panelTheme: ['host', 'light', 'dark'], modifier: ['alt', 'ctrl', 'shift', 'none'], keyModifier: ['alt', 'ctrl', 'shift', 'altShift', 'ctrlShift'], touchMode: ['off', 'longPress', 'multiTap'], scope: ['chat', 'page'] })) {
     result[key] = values.includes(r[key]) ? r[key] : d[key];
   }
   result.mouseButton = [1, 2, 3, 4].includes(r.mouseButton) ? r.mouseButton : d.mouseButton;

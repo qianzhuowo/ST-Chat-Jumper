@@ -242,9 +242,9 @@ export function createFeature({ dependencies }) {
     }
     trigger(enableCard, '启用快捷轮盘', 'enabled', { hint: '默认关闭，开启后可与悬浮条同时使用。' });
     trigger(enableCard, '启用快捷键', 'keyboardEnabled');
-    const mods = [['alt', 'Alt'], ['ctrl', 'Ctrl'], ['shift', 'Shift']];
-    trigger(enableCard, '快捷键修饰键', 'keyModifier', { choices: mods });
-    const keyInput = trigger(enableCard, '快捷键字母 / 数字', 'key', { type: 'text', hint: '默认 Alt + J，修饰键精确匹配。' }); keyInput.maxLength = 1; keyInput.pattern = '[a-zA-Z0-9]';
+    const mods = [['alt', 'Alt'], ['ctrl', 'Ctrl'], ['shift', 'Shift'], ['altShift', 'Alt + Shift'], ['ctrlShift', 'Ctrl + Shift']];
+    trigger(enableCard, '快捷键修饰键', 'keyModifier', { choices: mods, hint: '默认 Alt + Shift，避开浏览器常用单修饰键快捷键；额外修饰键会被精确拒绝。' });
+    const keyInput = trigger(enableCard, '快捷键字母 / 数字', 'key', { type: 'text', hint: '默认 Alt + Shift + J；建议使用不被浏览器占用的字母。' }); keyInput.maxLength = 1; keyInput.pattern = '[a-zA-Z0-9]';
     const mouseCard = card(triggerPage, '鼠标手势', '按住修饰键与鼠标键拖动越过阈值，滑向扇区后松手执行；普通右键未拖动时不屏蔽原生菜单。');
     trigger(mouseCard, '鼠标拖动呼出', 'mouseEnabled');
     trigger(mouseCard, '触发按键', 'mouseButton', { choices: [['2', '右键'], ['1', '中键'], ['3', '侧键 1'], ['4', '侧键 2']] });

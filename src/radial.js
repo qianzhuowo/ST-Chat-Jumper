@@ -1,4 +1,4 @@
-import { resolveSubringBounds, resolveWheelAppearance } from './radial-view.js';
+import { resolveSubringBounds, resolveWheelAppearance, resolveSubringRotation } from './radial-view.js';
 import { normalizeRadialAppearance } from './radial-config.js';
 export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView'];
 
@@ -67,6 +67,9 @@ export function createFeature({ dependencies }) {
     a.center = metrics.center;
     a.appearance = resolveWheelAppearance(a.config, a.menu, a.radius);
     a.subAppearance = a.submenu ? resolveWheelAppearance(a.config, a.submenu, a.radius) : null;
+    if (a.subAppearance && a.lockedParentIndex >= 0) {
+      a.subAppearance.rotation = resolveSubringRotation(a.menu.items.length, a.lockedParentIndex, a.appearance.rotation, a.subAppearance.rotation);
+    }
     a.overlay.replaceChildren();
     a.view = dependencies.createRadialView({
       menu: a.menu,
@@ -294,7 +297,10 @@ export function createFeature({ dependencies }) {
     detach?.();
     const listeners = [];
     const on = (target, type, fn, options) => { target.addEventListener(type, fn, options); listeners.push(() => target.removeEventListener(type, fn, options)); };
-    const modifier = (e, name) => ['alt', 'ctrl', 'shift', 'meta'].every(key => !!e[`${key}Key`] === (key === name));
+    const modifier = (e, name) => {
+      const required = name === 'altShift' ? ['alt', 'shift'] : name === 'ctrlShift' ? ['ctrl', 'shift'] : name === 'none' ? [] : [name];
+      return ['alt', 'ctrl', 'shift', 'meta'].every(key => !!e[`${key}Key`] === (required.includes(key)));
+    };
     const markConsumed = (x, y) => { consumed = { x, y, until: Date.now() + 400 }; };
     on(document, 'pointerdown', e => {
       consumed = null;
