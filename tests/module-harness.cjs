@@ -6,7 +6,7 @@ let features, createState;
 const ready = (async () => {
     const directory = path.join(__dirname, '..', 'src');
     const files = fs.readdirSync(directory).filter(name => name.endsWith('.js') && !['application.js', 'state.js', 'constants.js'].includes(name));
-    features = await Promise.all(files.map(name => import(pathToFileURL(path.join(directory, name)).href)));
+    features = (await Promise.all(files.map(name => import(pathToFileURL(path.join(directory, name)).href)))).filter(module => typeof module.createFeature === 'function');
     ({ createState } = await import('../src/state.js'));
 })();
 

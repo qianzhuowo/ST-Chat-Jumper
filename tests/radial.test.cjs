@@ -397,49 +397,37 @@ test('settings UI supports same-page primary/secondary free editing, co-screen p
   assert.equal(savedConfig.panelTheme, 'dark');
   assert.equal(themeDarkBtn.classes.has('is-active'), true);
 
-  // 2. Same-page co-screen preview and inline secondary wheel free editor on actions page
   const actionsPage = mount.querySelector('[data-stcj-page=actions]');
-  assert.ok(actionsPage);
-  const inlineSubwheel = actionsPage.all().find(n => n.dataset?.inlineSubwheel === 'true');
-  assert.ok(inlineSubwheel, 'inline secondary wheel workbench exists on the same actions page');
-  const previewSubring = actionsPage.all().find(n => n.classes?.has('stcj-radial-subring'));
-  assert.ok(previewSubring, 'live preview renders primary and secondary rings co-screen');
-
-  // Edit secondary wheel name, sector label, action, count, and independent appearance on the same actions page
-  const subNameInput = actionsPage.querySelector('[aria-label="二级轮盘名称"]');
-  subNameInput.value = '快捷收藏子盘';
-  subNameInput.emit('change');
-  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').label, '快捷收藏子盘');
-
-  const subLabelInput = actionsPage.querySelector('[aria-label="二级扇区标签"]');
-  subLabelInput.value = '同页改名子扇区';
-  subLabelInput.emit('change');
-  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').items[0].label, '同页改名子扇区');
-
-  const subIndepToggle = actionsPage.querySelector('[aria-label="同页独立二级外观"]');
-  subIndepToggle.checked = true;
-  subIndepToggle.emit('change');
-  assert.ok(savedConfig.menus.find(m => m.id === 'favorites').appearance);
-  const subThemeSelect = actionsPage.querySelector('[aria-label="同页二级配色方案"]');
-  subThemeSelect.value = 'forest';
-  subThemeSelect.emit('change');
-  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').appearance.theme, 'forest');
-
-  // 3. Copy & Paste sector + Undo & Redo
   const findBtn = text => actionsPage.all().find(n => n.tagName === 'BUTTON' && n.textContent === text);
-  const slot1Input = actionsPage.querySelector('[aria-label="扇区 1 标签"]');
-  slot1Input.value = '主扇区复制源';
-  slot1Input.emit('change');
-  findBtn('📋 复制扇区').emit('click');
-  findBtn('下一槽 ▶').emit('click');
-  findBtn('📥 粘贴扇区').emit('click');
-  assert.equal(savedConfig.menus[0].items[1].label, '主扇区复制源');
-
-  // Undo & Redo
-  findBtn('↶ 撤销').emit('click');
-  assert.notEqual(savedConfig.menus[0].items[1].label, '主扇区复制源');
-  findBtn('↷ 重做').emit('click');
-  assert.equal(savedConfig.menus[0].items[1].label, '主扇区复制源');
+  const canvasCell = (tier, i) => actionsPage.all().find(n => n.dataset?.editTier === tier && n.dataset.editIndex === String(i));
+  assert.equal(actionsPage.querySelector('.stcj-editor-breadcrumb'), null);
+  assert.equal(findBtn('+ 添加二级动作'), undefined, 'must select a parent first');
+  assert.equal(actionsPage.querySelector('.stcj-radial-subring'), null, 'no unrelated child is rendered');
+  canvasCell('main', 5).emit('click');
+  assert.ok(actionsPage.querySelector('.stcj-radial-subring'));
+  canvasCell('sub', 0).emit('click');
+  let name = actionsPage.querySelector('[aria-label="动作名称"]'); name.value = '子动作改名'; name.emit('change');
+  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').items[0].label, '子动作改名');
+  findBtn('删除此子动作').emit('click');
+  assert.equal(savedConfig.menus.find(m => m.id === 'favorites').items.length, 2);
+  findBtn('↶ 撤销').emit('click'); assert.equal(savedConfig.menus.find(m => m.id === 'favorites').items.length, 3);
+  findBtn('↷ 重做').emit('click'); assert.equal(savedConfig.menus.find(m => m.id === 'favorites').items.length, 2);
+  canvasCell('main', 0).emit('click');
+  name = actionsPage.querySelector('[aria-label="动作名称"]'); name.value = '复制源'; name.emit('change');
+  findBtn('📋 复制动作').emit('click'); canvasCell('main', 1).emit('click'); findBtn('📥 粘贴动作').emit('click');
+  assert.equal(savedConfig.menus[0].items[1].label, '复制源');
+  findBtn('↶ 撤销').emit('click'); assert.notEqual(savedConfig.menus[0].items[1].label, '复制源');
+  findBtn('↷ 重做').emit('click'); assert.equal(savedConfig.menus[0].items[1].label, '复制源');
+  findBtn('4 方位').emit('click'); assert.equal(savedConfig.menus[0].items.length, 6, 'shrink waits for confirmation');
+  findBtn('取消缩减').emit('click'); assert.equal(savedConfig.menus[0].items.length, 6);
+  findBtn('4 方位').emit('click'); findBtn('确认缩减').emit('click'); assert.equal(savedConfig.menus[0].items.length, 4);
+  assert.ok(savedConfig.menus.some(m => m.id === 'favorites'), 'unbound child data retained');
+  findBtn('↶ 撤销').emit('click'); assert.equal(savedConfig.menus[0].items.length, 6);
+  findBtn('↷ 重做').emit('click'); assert.equal(savedConfig.menus[0].items.length, 4);
+  canvasCell('main', 0).emit('click'); findBtn('+ 添加二级动作').emit('click');
+  const parent = savedConfig.menus[0].items[0], child = savedConfig.menus.find(m => m.id === parent.submenu);
+  assert.ok(child); assert.equal(child.items[0].action.id, 'prev', 'former direct action retained');
+  assert.equal(child.items.length, 2); assert.equal(r.executed.length, 0, 'editor never runs actions');
 
   // 4. Simple mode toggle does not lose or alter saved config
   const snapshotBeforeSimple = JSON.stringify(savedConfig);
@@ -506,4 +494,41 @@ test('legacy JSON imports are gated on the current schema', () => {
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/radial-settings.js'), 'utf8');
   assert.ok(source.includes('raw.version !== RADIAL_CONFIG_VERSION'));
   assert.ok(!source.includes('同页二级起始旋转'));
+});
+
+function editorReviewFixture() {
+  const r = runtime();
+  r.config.menus[0].items[0] = { label:'Shared first', submenu:'favorites' };
+  const dialog = new Element('dialog'), mount = new Element('div'); dialog.append(mount);r.document.body.append(dialog);
+  let saved = r.config, writes=0;
+  const feature = radialSettingsModule.createFeature({dependencies:{
+    getRadialConfig:()=>saved,saveRadialConfig:next=>{saved=configModule.normalizeRadialConfig(next);writes++;},
+    listShortcutActions:()=>[{type:'plugin',id:'prev',label:'prev'}],cancelRadial:()=>{},
+    createRadialView:opts=>viewModule.createFeature().createRadialView(opts),loadFavoritesPreviewMode:()=> 'swipe_default',saveFavoritesPreviewMode:()=>{}
+  }});
+  feature.mountRadialSettings(mount);
+  const actions=mount.querySelector('[data-stcj-page=actions]');
+  return {r,mount,actions,feature,saved:()=>saved,writes:()=>writes,cell:(tier,i)=>actions.all().find(n=>n.dataset.editTier===tier&&n.dataset.editIndex===String(i))};
+}
+test('center deselection refreshes appearance and stale child controls cannot mutate or record history', () => {
+  const f=editorReviewFixture(); f.cell('main',5).click(); f.cell('sub',0).click();
+  const stale=f.mount.querySelector('[aria-label="独立二级外观"]'); assert.ok(stale);
+  const before=JSON.stringify(f.saved()), writes=f.writes();
+  f.actions.querySelector('.stcj-radial-center').click();
+  assert.equal(f.mount.querySelector('[aria-label="独立二级外观"]'),null);
+  stale.checked=true; assert.doesNotThrow(()=>stale.emit('change'));
+  assert.equal(JSON.stringify(f.saved()),before);assert.equal(f.writes(),writes);
+  const undo=f.actions.all().find(n=>n.textContent==='↶ 撤销'); assert.equal(undo.disabled,true);
+  f.feature.destroyRadialSettings(); f.r.services.destroyRadial();
+});
+test('shared appearance selector identifies the parent and isolates only the selected second parent', () => {
+  const f=editorReviewFixture();
+  const picker=f.mount.querySelector('[aria-label="外观编辑轮盘"]');
+  assert.ok(picker.children.some(n=>n.value==='parent:0')); assert.ok(picker.children.some(n=>n.value==='parent:5'));
+  picker.value='parent:5';picker.emit('change');
+  const independent=f.mount.querySelector('[aria-label="独立二级外观"]'); independent.checked=true;independent.emit('change');
+  const c=f.saved(),first=c.menus[0].items[0],second=c.menus[0].items[5];
+  assert.equal(first.submenu,'favorites'); assert.notEqual(second.submenu,'favorites');
+  assert.equal(c.menus.find(m=>m.id==='favorites').appearance,null);assert.ok(c.menus.find(m=>m.id===second.submenu).appearance);
+  f.feature.destroyRadialSettings();f.r.services.destroyRadial();
 });

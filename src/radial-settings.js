@@ -1,7 +1,9 @@
+import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, resizePrimary, swapSlots, affectedByShrink } from './radial-editor.js';
+import { bindCanvasSwap } from './radial-canvas-edit.js';
 import { resolveWheelAppearance } from './radial-view.js';
 import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
 
-export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'openRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode'];
+export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode'];
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
@@ -21,8 +23,9 @@ export function createFeature({ dependencies }) {
     destroyRadialSettings();
     const config = dependencies.getRadialConfig();
     const dialog = container.closest('dialog');
-    let menuId = 'main', slotIndex = 0, subMenuId = config.menus.find(m => m.id !== 'main')?.id || null, subSlotIndex = 0;
-    let previewZoom = 100, coScreenPreview = true, clipboardSlot = null;
+    let menuId = 'main', slotIndex = -1, subMenuId = null, subSlotIndex = -1;
+    let pendingCount = null;
+    let previewZoom = 100, clipboardSlot = null;
     const undo = new Map(), historyStack = [], redoStack = [], previews = [];
     container.classList.add('stcj-radial-settings');
     const status = dialog?.querySelector('#stcj-settings-save-state') || element('p', 'stcj-editor-status', '自动保存 · 预览不会执行动作');
@@ -52,8 +55,9 @@ export function createFeature({ dependencies }) {
       config.menus = copy(entry.menus); config.appearance = copy(entry.appearance); config.radius = entry.radius;
       menuId = config.menus.some(m => m.id === entry.menuId) ? entry.menuId : 'main';
       subMenuId = config.menus.some(m => m.id === entry.subMenuId && m.id !== 'main') ? entry.subMenuId : (config.menus.find(m => m.id !== 'main')?.id || null);
-      slotIndex = Math.max(0, Math.min(entry.slotIndex || 0, (currentMenu().items.length || 1) - 1));
-      subSlotIndex = Math.max(0, Math.min(entry.subSlotIndex || 0, ((activeSubmenu()?.items.length) || 1) - 1));
+      slotIndex = Math.max(-1, Math.min(entry.slotIndex ?? -1, mainMenu().items.length - 1));
+      subSlotIndex = Math.max(-1, Math.min(entry.subSlotIndex ?? -1, (activeSubmenu()?.items.length || 0) - 1));
+      pendingCount = null;
       save(message); renderEditor(); renderAppearance();
     }
     function performUndo() {
@@ -110,126 +114,90 @@ export function createFeature({ dependencies }) {
     }
     function mainMenu() { return config.menus.find(m => m.id === 'main') || config.menus[0]; }
     function currentMenu() { return config.menus.find(m => m.id === menuId) || mainMenu(); }
-    function activeSubmenu() {
-      if (menuId !== 'main') return currentMenu();
-      const primaryItem = mainMenu().items[slotIndex];
-      if (primaryItem?.submenu) {
-        const linked = config.menus.find(m => m.id === primaryItem.submenu && m.id !== 'main');
-        if (linked) { subMenuId = linked.id; return linked; }
-      }
-      if (subMenuId) {
-        const chosen = config.menus.find(m => m.id === subMenuId && m.id !== 'main');
-        if (chosen) return chosen;
-      }
-      return config.menus.find(m => m.id !== 'main') || null;
-    }
+    function activeSubmenu() { return selectedChild(config, slotIndex); }
     function appearance(targetMenu = currentMenu()) { return normalizeRadialAppearance(targetMenu?.appearance || config.appearance); }
     function selectMenu(id, nextSlot = 0) {
-      menuId = config.menus.some(m => m.id === id) ? id : 'main';
-      if (menuId !== 'main') { subMenuId = menuId; subSlotIndex = nextSlot; }
-      slotIndex = nextSlot; renderEditor(); renderAppearance(); renderPreviews();
+      if (id === 'main') { menuId = 'main'; subSlotIndex = -1; }
+      else {
+        const parent = /^parent:\d+$/.test(id) ? Number(id.slice(7)) : -1;
+        const linked = selectedChild(config, parent);
+        if (!linked) return;
+        slotIndex = parent; menuId = linked.id; subMenuId = linked.id; subSlotIndex = nextSlot;
+      }
+      renderEditor(); renderAppearance(); renderPreviews();
     }
     function stepSlot(delta) {
-      const menu = currentMenu(); if (!menu.items.length) return;
-      slotIndex = ((slotIndex < 0 ? 0 : slotIndex) + delta + menu.items.length) % menu.items.length;
-      if (menu.id !== 'main') subSlotIndex = slotIndex;
-      renderEditor(); renderPreviews();
-    }
-    function createNewSubmenu() {
-      recordSnapshot('新建二级轮盘');
-      let n = 1; while (config.menus.some(m => m.id === `child-${n}`)) n++;
-      const id = `child-${n}`;
-      config.menus.push({ id, label: `子轮盘 ${n}`, appearance: null, items: [
-        { label: '子扇区 1', action: { type: 'plugin', id: 'prev' } },
-        { label: '子扇区 2', action: { type: 'plugin', id: 'next' } },
-        { label: '子扇区 3', action: { type: 'plugin', id: 'recent1' } },
-        { label: '子扇区 4', action: { type: 'plugin', id: 'showRange' } },
-      ] });
-      subMenuId = id; subSlotIndex = 0; return id;
+      slotIndex = ((slotIndex < 0 ? 0 : slotIndex) + delta + mainMenu().items.length) % mainMenu().items.length;
+      subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews();
     }
     function menuPicker(parent, aria = '编辑轮盘') {
-      return field(parent, '当前轮盘', { choices: config.menus.map(m => [m.id, `${m.id === 'main' ? '◉' : '↳'} ${m.label}`]), value: menuId, aria, onChange: id => selectMenu(id, 0) });
+      const choices = [['main', '一级动作'], ...mainMenu().items.flatMap((item, i) => item.submenu ? [[`parent:${i}`, `第 ${i + 1} 格的二级动作`]] : [])];
+      return field(parent, '外观对象', { choices, value: menuId === 'main' ? 'main' : `parent:${slotIndex}`, aria, onChange: id => selectMenu(id, 0) });
     }
-    function bindDragReorder(btn, idx, items, onDone, getFrom, setFrom) {
-      btn.draggable = true;
-      btn.addEventListener('dragstart', () => setFrom(idx));
-      btn.addEventListener('dragover', e => e.preventDefault());
-      btn.addEventListener('drop', e => {
-        e.preventDefault(); const from = getFrom();
-        if (from == null || from === idx) return;
-        recordSnapshot('拖拽调整扇区顺序');
-        const [moved] = items.splice(from, 1); items.splice(idx, 0, moved);
-        setFrom(null); onDone(idx);
+    function change(reason, mutate) {
+      const before = { menus: copy(config.menus), appearance: copy(config.appearance), radius: config.radius };
+      const previousRedo = redoStack.slice();
+      recordSnapshot(reason);
+      try { mutate(); }
+      catch (error) { Object.assign(config, before); historyStack.pop(); redoStack.splice(0, redoStack.length, ...previousRedo); status.textContent = error.message; return; }
+      pendingCount = null; save(); renderEditor(); renderAppearance();
+    }
+    function mutateSelected(reason, mutate) {
+      change(reason, () => {
+        const menu = subSlotIndex >= 0 ? ownChild(config, slotIndex) : mainMenu();
+        if (subSlotIndex >= 0) { menuId = menu.id; subMenuId = menu.id; }
+        mutate(menu.items[subSlotIndex >= 0 ? subSlotIndex : slotIndex], menu);
       });
     }
+    function swapCanvas(tier, from, to) {
+      const menu = tier === 'sub' ? activeSubmenu() : mainMenu();
+      if (!menu || from === to || to < 0 || to >= menu.items.length) return;
+      change('画布交换动作', () => {
+        const target = tier === 'sub' ? ownChild(config, slotIndex) : mainMenu();
+        swapSlots(target.items, from, to);
+        if (tier === 'sub') { subSlotIndex = to; menuId = target.id; subMenuId = target.id; }
+        else { slotIndex = to; subSlotIndex = -1; menuId = 'main'; }
+      });
+      const focused = previews.find(p => p.canvas.closest('[data-stcj-page="actions"]'));
+      focused?.canvas.querySelector(`[data-edit-tier="${tier}"][data-edit-index="${to}"]`)?.focus();
+    }
     function preview(parent) {
-      const box = card(parent, '实时交互画布', '一二级轮盘同屏联动展示：点击内圈选一级主扇区，点击外圈选二级子扇区。这里只预览，不执行动作。');
+      const box = card(parent, '实时动作画布', '从北向开始顺时针。点击格子编辑；拖到同层另一格交换，一级交换携带二级动作。Alt + 方向键也可交换；Esc 取消拖拽。预览绝不执行动作。');
       box.classList.add('stcj-preview-card');
-      box.append(element('span', 'stcj-preview-badge', 'LIVE'));
       const canvasToolbar = element('div', 'stcj-canvas-toolbar');
-      const coScreenBtn = button(canvasToolbar, coScreenPreview ? '🌟 同屏双环' : '🔘 单环聚焦', () => { coScreenPreview = !coScreenPreview; renderPreviews(); }, `stcj-canvas-tool-btn${coScreenPreview ? ' is-active' : ''}`);
-      coScreenBtn.setAttribute('aria-label', '切换一二级同屏预览');
       const zoomOutBtn = button(canvasToolbar, '−', () => { previewZoom = Math.max(75, previewZoom - 10); renderPreviews(); }, 'stcj-canvas-tool-btn'); zoomOutBtn.setAttribute('aria-label', '缩小预览');
-      const zoomResetBtn = button(canvasToolbar, `${previewZoom}%`, () => { previewZoom = 100; renderPreviews(); }, 'stcj-canvas-zoom-label'); zoomResetBtn.setAttribute('aria-label', '重置预览缩放');
+      const zoomResetBtn = button(canvasToolbar, '100%', () => { previewZoom = 100; renderPreviews(); }, 'stcj-canvas-zoom-label'); zoomResetBtn.setAttribute('aria-label', '重置预览缩放');
       const zoomInBtn = button(canvasToolbar, '+', () => { previewZoom = Math.min(130, previewZoom + 10); renderPreviews(); }, 'stcj-canvas-tool-btn'); zoomInBtn.setAttribute('aria-label', '放大预览');
-      const resetViewBtn = button(canvasToolbar, '🎯', () => { previewZoom = 100; slotIndex = 0; renderEditor(); renderPreviews(); }, 'stcj-canvas-tool-btn'); resetViewBtn.setAttribute('aria-label', '复位预览视图');
       box.append(canvasToolbar);
-      const canvas = element('div', 'stcj-preview-canvas'); box.append(canvas);
-      const indicator = element('div', 'stcj-canvas-indicator', '🎯 正在编辑: 主轮盘'); box.append(indicator);
+      const canvas = element('div', 'stcj-preview-canvas stcj-edit-canvas'); box.append(canvas);
+      const indicator = element('div', 'stcj-canvas-indicator'); box.append(indicator);
       const caption = element('p', 'stcj-preview-caption'); box.append(caption);
-      const tools = element('div', 'stcj-editor-tools'); box.append(tools);
-      button(tools, '◀ 上一槽', () => stepSlot(-1));
-      button(tools, '下一槽 ▶', () => stepSlot(1));
-      button(tools, '↶ 主轮盘', () => selectMenu('main'));
-      button(tools, '试用真实轮盘', () => { if (!config.enabled) { status.textContent = '请先在「触发与安全」启用轮盘，再试用。'; return; } dialog?.close(); dependencies.openRadial(); });
-      previews.push({ canvas, caption, indicator, zoomResetBtn, coScreenBtn });
+      previews.push({ canvas, caption, indicator, zoomResetBtn, dispose: null });
     }
     function renderPreviews() {
-      const main = mainMenu(), menu = currentMenu(), sub = activeSubmenu(), isEditingSub = menu.id !== 'main';
-      const showCoScreen = coScreenPreview && !!sub && sub.items.length > 0;
-      const mainA = appearance(main), activeItem = menu.items[slotIndex];
+      const main = mainMenu(), sub = activeSubmenu(), mainA = appearance(main);
       for (const p of previews) {
-        p.zoomResetBtn.textContent = `${previewZoom}%`;
-        p.coScreenBtn.textContent = coScreenPreview ? '🌟 同屏双环' : '🔘 单环聚焦';
-        p.coScreenBtn.classList.toggle('is-active', coScreenPreview);
-        if (showCoScreen) {
-          const maxInnerR = Math.min(96, Math.max(42, ((p.canvas.clientWidth || 330) - 110) / 2), config.radius * mainA.scale / 100 * 0.78);
-          const radius = Math.max(40, Math.min(110, Math.round(maxInnerR * (previewZoom / 100))));
-          const parentIdx = main.items.findIndex(item => item.submenu === sub.id);
-          const view = dependencies.createRadialView({
-            menu: main, appearance: resolveWheelAppearance(config, main, config.radius * mainA.scale / 100), radius,
-            selected: isEditingSub ? parentIdx : slotIndex, submenu: sub,
-            subAppearance: resolveWheelAppearance(config, sub, config.radius * appearance(sub).scale / 100),
-            subSelected: isEditingSub ? slotIndex : subSlotIndex, parentIndex: parentIdx, activeTier: isEditingSub ? 'sub' : 'main', preview: true,
-            onChoose: i => {
-              if (main.items[i]?.submenu) { subMenuId = main.items[i].submenu; subSlotIndex = 0; }
-              menuId = 'main'; slotIndex = i; renderEditor(); renderAppearance(); renderPreviews(); dialog?.querySelector('[data-settings-page=actions]')?.click();
-            },
-            onSubChoose: i => {
-              subMenuId = sub.id; subSlotIndex = i; if (isEditingSub) slotIndex = i;
-              renderEditor(); renderAppearance(); renderPreviews(); dialog?.querySelector('[data-settings-page=actions]')?.click();
-            },
-            onCenter: () => { if (menuId !== 'main') selectMenu('main'); else { slotIndex = -1; renderEditor(); renderPreviews(); } },
-            onHover: i => { view.setSelected(i); p.caption.textContent = `内圈 · ${main.label} · ${i + 1} / ${main.items.length} · ${main.items[i]?.label || '空扇区'}${main.items[i]?.submenu ? ' › 展开同屏子轮盘' : ''}`; },
-            onSubHover: i => { view.setSubSelected(i); p.caption.textContent = `外圈 · ${sub.label} · ${i + 1} / ${sub.items.length} · ${sub.items[i]?.label || '空扇区'}`; },
-          });
-          p.canvas.replaceChildren(view.element);
-          p.indicator.textContent = activeItem ? `🎯 同屏预览: 内圈[${main.label}] + 外圈[${sub.label}] · 当前 #${slotIndex + 1} ${activeItem.label}` : `🎯 同屏预览: 内圈[${main.label}] + 外圈[${sub.label}]`;
-          p.caption.textContent = `内圈：${main.label} (${main.items.length}扇区) · 外圈：${sub.label} (${sub.items.length}扇区 · ${sub.appearance ? '独立外观' : '继承主轮盘'})`;
-        } else {
-          const a = appearance(menu);
-          const baseRadius = Math.min(155, Math.max(45, ((p.canvas.clientWidth || 330) - 18) / 2), config.radius * a.scale / 100);
-          const radius = Math.max(42, Math.min(172, Math.round(baseRadius * (previewZoom / 100))));
-          const view = dependencies.createRadialView({
-            menu, appearance: resolveWheelAppearance(config, menu, config.radius * a.scale / 100), radius, selected: slotIndex, preview: true,
-            onChoose: i => { slotIndex = i; renderEditor(); renderPreviews(); dialog?.querySelector('[data-settings-page=actions]')?.click(); editor.querySelector('[data-slot-inspector]')?.scrollIntoView({ block: 'nearest', behavior: 'instant' }); },
-            onCenter: () => { if (menuId !== 'main') selectMenu('main'); else { slotIndex = -1; renderEditor(); renderPreviews(); } },
-            onHover: i => { view.setSelected(i); p.caption.textContent = `${menu.label} · ${i + 1} / ${menu.items.length} · ${menu.items[i]?.label || '空扇区'}${menu.items[i]?.submenu ? ' › 子轮盘' : ''}`; },
-          });
-          p.canvas.replaceChildren(view.element);
-          p.indicator.textContent = activeItem ? `🎯 正在编辑: ${menu.label} · #${slotIndex + 1} ${activeItem.label}` : `🎯 正在编辑: ${menu.label} · 中心核圆`;
-          p.caption.textContent = `${menu.label} · ${menu.items.length} 个扇区 · ${menu.appearance ? '独立外观' : '主轮盘外观'}`;
-        }
+        p.dispose?.(); p.zoomResetBtn.textContent = `${previewZoom}%`;
+        const available = Math.min(p.canvas.clientWidth || 330, p.canvas.clientHeight || 315) - 24;
+        const radius = Math.max(40, Math.min(available / 3.1, config.radius * mainA.scale / 100 * previewZoom / 100));
+        const view = dependencies.createRadialView({
+          menu: main, appearance: resolveWheelAppearance(config, main, radius), radius,
+          selected: slotIndex, submenu: sub?.items.length ? sub : null,
+          subAppearance: sub ? resolveWheelAppearance(config, sub, radius) : null,
+          subSelected: subSlotIndex, parentIndex: slotIndex, activeTier: subSlotIndex >= 0 ? 'sub' : 'main', preview: true,
+          onChoose: i => { slotIndex = i; subSlotIndex = -1; menuId = 'main'; subMenuId = main.items[i]?.submenu || null; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
+          onSubChoose: i => { subSlotIndex = i; menuId = sub.id; subMenuId = sub.id; renderEditor(); renderAppearance(); renderPreviews(); },
+          onCenter: () => { slotIndex = -1; subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews(); },
+        });
+        p.canvas.replaceChildren(view.element);
+        for (const [tier, buttons] of [['main', view.buttons], ['sub', view.subButtons]]) (buttons || []).forEach((b, i) => {
+          b.dataset.editTier = tier; b.dataset.editIndex = String(i);
+          b.setAttribute('aria-keyshortcuts', 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown');
+          b.title += ' · 拖拽交换 / Alt+方向键';
+        });
+        p.dispose = bindCanvasSwap(p.canvas, swapCanvas, () => { status.textContent = '已取消拖拽，未修改动作'; });
+        p.indicator.textContent = slotIndex < 0 ? '先选一级格子，再添加二级动作' : `第 ${slotIndex + 1} 格${subSlotIndex >= 0 ? ' · 子动作 ' + (subSlotIndex + 1) : ''}`;
+        p.caption.textContent = `一级 ${main.items.length} 方位${sub ? ' · 此父格有 ' + sub.items.length + ' 个二级动作' : ''}`;
       }
     }
 
@@ -259,14 +227,26 @@ export function createFeature({ dependencies }) {
     const appearanceLayout = element('div', 'stcj-config-layout'); appearancePage.append(appearanceLayout);
     const appearanceControls = element('div', 'stcj-config-controls'); appearanceLayout.append(appearanceControls); preview(appearanceLayout);
     function renderAppearance() {
-      appearanceControls.replaceChildren(); const menu = currentMenu();
+      appearanceControls.replaceChildren(); let menu = currentMenu();
+      const appearanceParentIndex = slotIndex;
+      let target;
+      function beginAppearanceEdit(reason) {
+        if (menu.id !== menuId || (menu.id !== 'main' && (slotIndex !== appearanceParentIndex || activeSubmenu()?.id !== menu.id))) {
+          status.textContent = '编辑对象已改变，请重新选择格子；未修改配置'; return false;
+        }
+        if (menu.id !== "main" && mainMenu().items.filter(i => i.submenu === menu.id).length > 1 && config.menus.length >= 17) { status.textContent = "子动作组已满，无法隔离共享外观；未修改配置"; return false; }
+        recordSnapshot(reason);
+        if (menu.id !== "main") { menu = ownChild(config, slotIndex); menuId = menu.id; subMenuId = menu.id; }
+        target = menu.id === "main" ? config.appearance : menu.appearance;
+        return true;
+      }
       const scope = card(appearanceControls, '轮盘外观作用域'); menuPicker(scope, '外观编辑轮盘');
       field(scope, '设置窗口主题', { choices: [['host', '跟随酒馆'], ['light', '清亮浅色'], ['dark', '柔和深色']], value: config.panelTheme, onChange: v => { config.panelTheme = v; syncPanelThemeUI(); save(); } });
       if (menu.id !== 'main') {
-        field(scope, '独立二级外观', { type: 'checkbox', value: !!menu.appearance, hint: '关闭时实时继承主轮盘。', onChange: v => { recordSnapshot('切换独立二级外观'); menu.appearance = v ? copy(config.appearance) : null; save(); renderAppearance(); renderEditor(); } });
-        button(scope, '同步主轮盘外观', () => { recordSnapshot('同步主轮盘外观'); menu.appearance = copy(config.appearance); save(); renderAppearance(); renderEditor(); });
+        field(scope, '独立二级外观', { type: 'checkbox', value: !!menu.appearance, hint: '关闭时实时继承主轮盘。', onChange: v => { if (!beginAppearanceEdit('切换独立二级外观')) return; menu.appearance = v ? copy(config.appearance) : null; save(); renderAppearance(); renderEditor(); } });
+        button(scope, '同步主轮盘外观', () => { if (!beginAppearanceEdit('同步主轮盘外观')) return; menu.appearance = copy(config.appearance); save(); renderAppearance(); renderEditor(); });
       }
-      const target = menu.id === 'main' ? config.appearance : menu.appearance;
+      target = menu.id === 'main' ? config.appearance : menu.appearance;
       const disabled = !target, a = appearance(menu);
       const palette = card(appearanceControls, '视觉风格与配色工作室', disabled ? '当前继承主轮盘，开启独立外观后可调整。' : '点击主题色卡一键切换视觉风格，或展开微调色彩与几何形态。');
       const studioGrid = element('div', 'stcj-theme-studio');
@@ -277,7 +257,7 @@ export function createFeature({ dependencies }) {
         for (const color of [t.surface, t.highlight, t.accent, t.center]) { const dot = element('i', 'stcj-theme-dot'); dot.style.background = color; dots.append(dot); }
         swatchBtn.append(dots, element('strong', '', t.label));
         swatchBtn.addEventListener('click', () => {
-          if (!target) return; recordSnapshot(`切换配色方案：${t.label}`);
+          if (!target) return; if (!beginAppearanceEdit(`切换配色方案：${t.label}`)) return;
           const preset = defaultRadialAppearance(id);
           for (const key of ['theme', 'surface', 'highlight', 'text', 'border', 'accent', 'center']) target[key] = preset[key];
           save(); renderAppearance(); renderEditor();
@@ -287,13 +267,13 @@ export function createFeature({ dependencies }) {
       palette.append(studioGrid);
       function styleField(parent, title, key, options = {}) {
         return field(parent, title, { ...options, disabled, value: a[key], onChange: (v, input) => {
-          if (!target) return; target[key] = v; Object.assign(target, normalizeRadialAppearance(target));
+          if (!target || !beginAppearanceEdit('修改轮盘外观')) return; target[key] = v; Object.assign(target, normalizeRadialAppearance(target));
           if (input.type !== 'checkbox') input.value = target[key]; save();
           if (key === 'showIcons' || key === 'showLabels') { renderAppearance(); renderEditor(); }
         } });
       }
       field(palette, '配色方案', { choices: Object.entries(RADIAL_THEMES).map(([id, t]) => [id, t.label]), value: a.theme, disabled, onChange: v => {
-        recordSnapshot('切换配色方案'); const preset = defaultRadialAppearance(v);
+        if (!beginAppearanceEdit('切换配色方案')) return; const preset = defaultRadialAppearance(v);
         for (const key of ['theme', 'surface', 'highlight', 'text', 'border', 'accent', 'center']) target[key] = preset[key];
         save(); renderAppearance(); renderEditor();
       } });
@@ -307,178 +287,73 @@ export function createFeature({ dependencies }) {
       }
       styleField(geometry, '显示图标', 'showIcons', { type: 'checkbox' }); styleField(geometry, '显示标签', 'showLabels', { type: 'checkbox' });
       const centerInput = styleField(geometry, '中心核符号', 'centerSymbol', { type: 'text', hint: '仅文本符号，不加载图片或外部字体。', proOnly: true }); centerInput.maxLength = 6;
-      button(geometry, '重置当前外观', () => { recordSnapshot('重置当前外观'); if (menu.id === 'main') { config.appearance = defaultRadialAppearance(); menu.appearance = null; } else menu.appearance = defaultRadialAppearance(); save(); renderAppearance(); renderEditor(); });
+      button(geometry, '重置当前外观', () => { if (!beginAppearanceEdit('重置当前外观')) return; if (menu.id === 'main') { config.appearance = defaultRadialAppearance(); menu.appearance = null; } else menu.appearance = defaultRadialAppearance(); save(); renderAppearance(); renderEditor(); });
     }
 
-    const actionPage = page('actions', '扇区与动作', '一二级轮盘同屏不跳转预览与同页自由编辑：在同一页面直接调整主轮盘与各二级轮盘的名称、数量、排序、标签、图标、动作及独立外观。');
-    const actionLayout = element('div', 'stcj-config-layout'); actionPage.append(actionLayout);
-    const editor = element('div', 'stcj-config-controls'); actionLayout.append(editor); preview(actionLayout);
+    const actionPage = page('actions', '扇区与动作', '先在画布选择一级格子，再配置动作或添加属于它的二级动作。');
+    const actionLayout = element('div', 'stcj-config-layout stcj-actions-layout'); actionPage.append(actionLayout);
+    preview(actionLayout);
+    const editor = element('div', 'stcj-config-controls'); actionLayout.append(editor);
     const actions = dependencies.listShortcutActions();
-
-    function renderInlineSubwheelEditor(parentCard) {
-      const sub = activeSubmenu();
-      const subBox = card(parentCard, '二级轮盘同页工作台（同屏外环）', '无需跳转页面，直接在此自由编辑二级子轮盘的名称、扇区数量、排序、标签、图标、动作与独立外观。');
-      subBox.classList.add('stcj-inline-subwheel-card'); subBox.dataset.inlineSubwheel = 'true';
-      const subMenus = config.menus.filter(m => m.id !== 'main');
-      if (!subMenus.length || !sub) {
-        button(subBox, '+ 新建首个二级轮盘', () => { createNewSubmenu(); save('已新建二级轮盘'); renderEditor(); renderAppearance(); });
-        return;
-      }
-      if (subSlotIndex >= sub.items.length) subSlotIndex = Math.max(0, sub.items.length - 1);
-      const subHeaderPills = element('div', 'stcj-wheel-pills');
-      subMenus.forEach(m => {
-        const pill = button(subHeaderPills, `↳ ${m.label} (${m.items.length})`, () => { subMenuId = m.id; subSlotIndex = 0; renderEditor(); renderPreviews(); }, m.id === sub.id ? 'stcj-wheel-pill is-active' : 'stcj-wheel-pill');
-        pill.dataset.subwheelTab = m.id;
-      });
-      button(subHeaderPills, '+ 新建子轮盘', () => { createNewSubmenu(); save('已新建二级轮盘'); renderEditor(); renderAppearance(); }, 'stcj-wheel-pill').disabled = config.menus.length >= 17;
-      subBox.append(subHeaderPills);
-      field(subBox, '二级轮盘名称', { value: sub.label, aria: '二级轮盘名称', onChange: v => { recordSnapshot('修改二级轮盘名称'); sub.label = v || '未命名子轮盘'; save(); renderEditor(); renderAppearance(); } });
-      const subCountTools = element('div', 'stcj-editor-tools'); subBox.append(subCountTools);
-      for (const n of [4, 8, 12]) {
-        button(subCountTools, `子轮盘 ${n} 方位`, () => {
-          recordSnapshot(`子轮盘切换为 ${n} 方位`); undo.set(sub.id, copy(sub.items));
-          sub.items = Array.from({ length: n }, (_, i) => sub.items[i] || { label: `子扇区 ${i + 1}`, action: { type: actions[0].type, id: actions[0].id } });
-          subSlotIndex = 0; save(); renderEditor();
-        }, sub.items.length === n ? 'is-active' : '');
-      }
-      button(subCountTools, '+ 添加子扇区', () => { recordSnapshot('添加二级子扇区'); sub.items.push({ label: `子扇区 ${sub.items.length + 1}`, action: { type: actions[0].type, id: actions[0].id } }); subSlotIndex = sub.items.length - 1; save(); renderEditor(); }).disabled = sub.items.length >= 12;
-      button(subCountTools, '撤销子轮盘数量', () => { if (!undo.has(sub.id)) return; sub.items = undo.get(sub.id); undo.delete(sub.id); subSlotIndex = 0; save(); renderEditor(); }).disabled = !undo.has(sub.id);
-      const subSlotsGrid = element('div', 'stcj-slot-grid stcj-subslot-grid'); subBox.append(subSlotsGrid);
-      let dragSubFrom = null;
-      sub.items.forEach((sItem, idx) => {
-        const chip = button(subSlotsGrid, `${idx + 1} · ${sItem.icon ? sItem.icon + ' ' : ''}${sItem.label}`, () => { subSlotIndex = idx; if (menuId === sub.id) slotIndex = idx; renderEditor(); renderPreviews(); }, idx === subSlotIndex ? 'stcj-subslot-chip is-active' : 'stcj-subslot-chip');
-        chip.dataset.subslotChip = String(idx); chip.title = `拖拽或点击编辑 · ${formatDirectionBadge(idx, sub.items.length)} · ${sItem.label}`;
-        bindDragReorder(chip, idx, sub.items, nextIdx => { subSlotIndex = nextIdx; save(); renderEditor(); }, () => dragSubFrom, v => { dragSubFrom = v; });
-      });
-      const subItem = sub.items[subSlotIndex];
-      if (subItem) {
-        const subInspector = element('div', 'stcj-subslot-inspector'); subInspector.dataset.subslotInspector = 'true';
-        const subHeader = element('div', 'stcj-focus-header'), subMeta = element('div', 'stcj-focus-meta');
-        subMeta.append(element('span', 'stcj-slot-badge', `↳ #${subSlotIndex + 1}`), element('strong', 'stcj-slot-direction', `${sub.label} · ${formatDirectionBadge(subSlotIndex, sub.items.length)}`), element('span', 'stcj-slot-tier-tag', '二级子扇区'));
-        subHeader.append(subMeta); subInspector.append(subHeader);
-        field(subInspector, '二级扇区标签', { value: subItem.label, aria: '二级扇区标签', onChange: v => { recordSnapshot('修改二级扇区标签'); subItem.label = v || '未设置'; save(); renderEditor(); } });
-        const subIcons = copy(ICON_PRESETS); if (subItem.icon && !subIcons.some(i => i[0] === subItem.icon)) subIcons.push([subItem.icon, subItem.icon]);
-        field(subInspector, '二级扇区图标', { value: subItem.icon || '', choices: subIcons, aria: '二级扇区图标', onChange: v => { recordSnapshot('修改二级扇区图标'); if (v) subItem.icon = v; else delete subItem.icon; save(); renderEditor(); } });
-        const subIconInput = field(subInspector, '自定义二级图标文字', { value: subItem.icon || '', aria: '自定义二级图标文字', proOnly: true, onChange: v => { recordSnapshot('自定义二级图标文字'); subItem.icon = [...v].slice(0, 4).join(''); save(); renderEditor(); } }); subIconInput.maxLength = 8;
-        field(subInspector, '二级扇区独立文字色', { type: 'checkbox', value: !!subItem.color, aria: '二级扇区独立文字色', proOnly: true, onChange: v => { recordSnapshot('切换二级扇区文字颜色'); if (v) subItem.color = appearance(sub).text; else delete subItem.color; save(); renderEditor(); } });
-        if (subItem.color) field(subInspector, '二级扇区文字颜色', { type: 'color', value: subItem.color, aria: '二级扇区文字颜色', live: true, proOnly: true, onChange: v => { subItem.color = v; save(); } });
-        field(subInspector, '二级扇区动作类型', { value: subItem.action ? 'action' : 'empty', choices: [['empty', '空扇区 / 取消'], ['action', '插件动作']], aria: '二级扇区动作类型', onChange: v => { recordSnapshot('修改二级扇区动作类型'); delete subItem.action; if (v === 'action') subItem.action = { type: actions[0].type, id: actions[0].id }; save(); renderEditor(); } });
-        if (subItem.action) {
-          const choices = actions.map(a => [`${a.type}:${a.id}`, a.label]), selected = `${subItem.action.type}:${subItem.action.id}`;
-          if (!choices.some(c => c[0] === selected)) choices.push([selected, '未注册扩展动作（保留，不能执行）']);
-          field(subInspector, '二级扇区执行动作', { value: selected, choices, aria: '二级扇区执行动作', onChange: v => { recordSnapshot('修改二级扇区执行动作'); const [type, ...id] = v.split(':'); subItem.action = { type, id: id.join(':') }; save(); } });
-        }
-        const subTools = element('div', 'stcj-editor-tools');
-        for (const [text, direction] of [['↑ 子扇区上移', -1], ['↓ 子扇区下移', 1]]) {
-          button(subTools, text, () => { recordSnapshot('调整二级扇区顺序'); const next = subSlotIndex + direction; [sub.items[subSlotIndex], sub.items[next]] = [sub.items[next], subItem]; subSlotIndex = next; save(); renderEditor(); }).disabled = subSlotIndex + direction < 0 || subSlotIndex + direction >= sub.items.length;
-        }
-        button(subTools, '删除当前子扇区', () => { recordSnapshot('删除二级扇区'); sub.items.splice(subSlotIndex, 1); subSlotIndex = Math.max(0, Math.min(subSlotIndex, sub.items.length - 1)); save(); renderEditor(); });
-        subInspector.append(subTools); subBox.append(subInspector);
-      }
-      const subAppBox = element('div', 'stcj-inline-appearance-box'); subAppBox.dataset.inlineSubAppearance = 'true';
-      subAppBox.append(element('h4', 'stcj-inline-subtitle', `🎨 ${sub.label} · 独立外观（同页编辑）`));
-      field(subAppBox, '启用二级独立外观', { type: 'checkbox', value: !!sub.appearance, aria: '同页独立二级外观', hint: '关闭时继承一级主轮盘外观；开启后可为该二级子轮盘单独定制主题、形态与文字（半径及角度严格跟随父扇区）。', onChange: v => { recordSnapshot('切换二级独立外观'); sub.appearance = v ? copy(config.appearance) : null; save(); renderEditor(); renderAppearance(); } });
-      if (sub.appearance) {
-        const subA = appearance(sub);
-        field(subAppBox, '二级配色方案', { choices: Object.entries(RADIAL_THEMES).map(([id, t]) => [id, t.label]), value: subA.theme, aria: '同页二级配色方案', onChange: v => { recordSnapshot('切换二级配色方案'); const preset = defaultRadialAppearance(v); for (const key of ['theme', 'surface', 'highlight', 'text', 'border', 'accent', 'center']) sub.appearance[key] = preset[key]; save(); renderEditor(); renderAppearance(); } });
-        field(subAppBox, '二级轮盘形态', { choices: [['ring', '分区圆环'], ['petals', '疏朗花瓣'], ['solid', '连续圆环']], value: subA.shape, aria: '同页二级轮盘形态', onChange: v => { sub.appearance.shape = v; Object.assign(sub.appearance, normalizeRadialAppearance(sub.appearance)); save(); renderAppearance(); } });
-        for (const [title, key, ariaLabel] of [['二级扇区底色', 'surface', '同页二级扇区底色'], ['二级选中填色', 'highlight', '同页二级选中填色'], ['二级高亮描边', 'accent', '同页二级高亮描边'], ['二级文字颜色', 'text', '同页二级文字颜色']]) {
-          field(subAppBox, title, { type: 'color', value: subA[key], aria: ariaLabel, live: true, onChange: v => { sub.appearance[key] = v; Object.assign(sub.appearance, normalizeRadialAppearance(sub.appearance)); save(); renderAppearance(); } });
-        }
-        for (const [title, key, min, max, ariaLabel] of [['二级扇区间隙 · °', 'gap', 0, 16, '同页二级扇区间隙'], ['二级文字大小 · px', 'fontSize', 10, 20, '同页二级文字大小']]) {
-          field(subAppBox, title, { type: 'range', min, max, value: subA[key], aria: ariaLabel, live: true, onChange: v => { sub.appearance[key] = v; Object.assign(sub.appearance, normalizeRadialAppearance(sub.appearance)); save(); renderAppearance(); } });
-        }
-        const subAppTools = element('div', 'stcj-editor-tools');
-        button(subAppTools, '同步主轮盘外观', () => { recordSnapshot('同步主轮盘外观到子轮盘'); sub.appearance = copy(config.appearance); save(); renderEditor(); renderAppearance(); });
-        subAppBox.append(subAppTools);
-      }
-      subBox.append(subAppBox);
-    }
-
     function renderEditor() {
-      editor.replaceChildren(); const menu = currentMenu();
-      if (slotIndex >= menu.items.length) slotIndex = menu.items.length - 1;
-      const breadcrumb = element('div', 'stcj-editor-breadcrumb');
-      config.menus.forEach(m => {
-        const pill = button(breadcrumb, `${m.id === 'main' ? '◉' : '↳'} ${m.label}`, () => selectMenu(m.id, 0), m.id === menu.id ? 'stcj-crumb is-active' : 'stcj-crumb');
-        pill.title = `切换聚焦到 ${m.label}（右侧画布保持一二级同屏展示）`;
-      });
-      const historyTools = element('div', 'stcj-breadcrumb-tools');
-      button(historyTools, '↶ 撤销', performUndo, 'stcj-mini-btn').disabled = !historyStack.length;
-      button(historyTools, '↷ 重做', performRedo, 'stcj-mini-btn').disabled = !redoStack.length;
-      breadcrumb.append(historyTools); editor.append(breadcrumb);
-
-      const profile = card(editor, '当前配置轮盘'); menuPicker(profile);
-      field(profile, '轮盘名称', { value: menu.label, onChange: v => { recordSnapshot('重命名轮盘'); menu.label = v || '未命名轮盘'; save(); renderEditor(); renderAppearance(); } });
-      const profileTools = element('div', 'stcj-editor-tools'); profile.append(profileTools);
-      button(profileTools, '+ 二级轮盘', () => { const id = createNewSubmenu(); save(); selectMenu(id, 0); }).disabled = config.menus.length >= 17;
-      if (menu.id !== 'main') {
-        button(profileTools, '◀ 返回主轮盘', () => selectMenu('main'));
-        button(profileTools, '删除此子轮盘', () => {
-          recordSnapshot('删除子轮盘'); config.menus = config.menus.filter(m => m.id !== menu.id);
-          for (const m of config.menus) for (const item of m.items) if (item.submenu === menu.id) delete item.submenu;
-          menuId = 'main'; subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; slotIndex = 0; save(); renderEditor(); renderAppearance();
+      editor.replaceChildren();
+      if (slotIndex >= mainMenu().items.length) slotIndex = -1;
+      const sub = activeSubmenu();
+      if (!sub || subSlotIndex >= sub.items.length) subSlotIndex = -1;
+      const toolbar = element('div', 'stcj-action-toolbar'); editor.append(toolbar);
+      button(toolbar, '↶ 撤销', performUndo, 'stcj-mini-btn').disabled = !historyStack.length;
+      button(toolbar, '↷ 重做', performRedo, 'stcj-mini-btn').disabled = !redoStack.length;
+      const countBox = element('div', 'stcj-fixed-counts'); toolbar.append(countBox);
+      countBox.setAttribute('role', 'group'); countBox.setAttribute('aria-label', '一级固定方位');
+      for (const count of PRIMARY_COUNTS) {
+        const b = button(countBox, `${count} 方位`, () => {
+          if (count === mainMenu().items.length) return;
+          if (count < mainMenu().items.length) { pendingCount = count; renderEditor(); return; }
+          change('调整一级方位数量', () => resizePrimary(config, count));
         });
+        b.setAttribute('aria-pressed', String(count === mainMenu().items.length));
       }
-
-      const count = card(editor, '扇区方向数量与排序', '从上方开始顺时针排列。支持点击或拖拽扇区调整顺序；调整数量保留已有内容。');
-      const countTools = element('div', 'stcj-editor-tools'); count.append(countTools);
-      for (const n of [4, 8, 12]) {
-        button(countTools, `${n} 方位`, () => { recordSnapshot(`切换为 ${n} 方位`); undo.set(menu.id, copy(menu.items)); menu.items = Array.from({ length: n }, (_, i) => menu.items[i] || { label: `扇区 ${i + 1}` }); slotIndex = 0; save(); renderEditor(); }, menu.items.length === n ? 'is-active' : '');
+      if (!PRIMARY_COUNTS.includes(mainMenu().items.length)) editor.append(element('p', 'stcj-settings-note', `兼容现有 ${mainMenu().items.length} 方位；选择 4 / 8 / 12 后应用，不自动改写。`));
+      if (pendingCount !== null) {
+        const warning = card(editor, '确认缩减方位', '以下一级动作将从画布移除，关联子动作保留归档；可撤销恢复。'); warning.dataset.resizeWarning = 'true';
+        for (const text of affectedByShrink(config, pendingCount)) warning.append(element('p', '', text));
+        button(warning, '确认缩减', () => change('缩减一级方位数量', () => { resizePrimary(config, pendingCount); slotIndex = -1; subSlotIndex = -1; menuId = 'main'; }));
+        button(warning, '取消缩减', () => { pendingCount = null; renderEditor(); });
       }
-      button(countTools, '撤销数量调整', () => { if (!undo.has(menu.id)) return; menu.items = undo.get(menu.id); undo.delete(menu.id); slotIndex = 0; save(); renderEditor(); }).disabled = !undo.has(menu.id);
-      const slots = element('div', 'stcj-slot-grid'); count.append(slots);
-      let dragMainFrom = null;
-      menu.items.forEach((item, i) => {
-        const b = button(slots, `${i + 1} · ${item.label}`, () => { slotIndex = i; if (item.submenu) { subMenuId = item.submenu; subSlotIndex = 0; } renderEditor(); renderPreviews(); }, i === slotIndex ? 'is-active' : '');
-        b.title = `拖拽排序或点击编辑 · ${formatDirectionBadge(i, menu.items.length)} · ${item.label}`;
-        bindDragReorder(b, i, menu.items, nextIdx => { slotIndex = nextIdx; save(); renderEditor(); }, () => dragMainFrom, v => { dragMainFrom = v; });
-      });
-      button(count, '+ 添加扇区（最多 12）', () => { recordSnapshot('添加扇区'); menu.items.push({ label: `扇区 ${menu.items.length + 1}` }); slotIndex = menu.items.length - 1; save(); renderEditor(); }).disabled = menu.items.length >= 12;
-
-      const item = menu.items[slotIndex];
-      if (!item) {
-        card(editor, '选择一个扇区', '点击画布或上方编号按钮，开始配置内容。');
-      } else {
-        const inspector = card(editor, `扇区 ${slotIndex + 1} · 内容与动作`); inspector.dataset.slotInspector = 'true';
-        const focusHeader = element('div', 'stcj-focus-header'), focusMeta = element('div', 'stcj-focus-meta'), focusNav = element('div', 'stcj-focus-nav');
-        focusMeta.append(element('span', 'stcj-slot-badge', `#${slotIndex + 1}`), element('strong', 'stcj-slot-direction', formatDirectionBadge(slotIndex, menu.items.length)), element('span', 'stcj-slot-tier-tag', menu.id === 'main' ? '一级主扇区' : '二级子扇区'));
-        button(focusNav, '◀ 上一槽', () => stepSlot(-1), 'stcj-mini-btn'); button(focusNav, '下一槽 ▶', () => stepSlot(1), 'stcj-mini-btn');
-        focusHeader.append(focusMeta, focusNav); inspector.append(focusHeader);
-        field(inspector, '显示标签', { value: item.label, aria: `扇区 ${slotIndex + 1} 标签`, onChange: v => { recordSnapshot('修改扇区标签'); item.label = v || '未设置'; save(); renderEditor(); } });
-        const icons = copy(ICON_PRESETS); if (item.icon && !icons.some(i => i[0] === item.icon)) icons.push([item.icon, item.icon]);
-        field(inspector, '图标符号', { value: item.icon || '', choices: icons, onChange: v => { recordSnapshot('修改扇区图标'); if (v) item.icon = v; else delete item.icon; save(); } });
-        const iconInput = field(inspector, '自定义图标文字', { value: item.icon || '', hint: '最多 4 个字符；不接受图片地址或脚本。', proOnly: true, onChange: v => { recordSnapshot('自定义图标文字'); item.icon = [...v].slice(0, 4).join(''); save(); } }); iconInput.maxLength = 8;
-        field(inspector, '独立文字颜色', { type: 'checkbox', value: !!item.color, proOnly: true, onChange: v => { recordSnapshot('切换独立文字颜色'); if (v) item.color = appearance(menu).text; else delete item.color; save(); renderEditor(); } });
-        if (item.color) field(inspector, '扇区文字颜色', { type: 'color', value: item.color, live: true, proOnly: true, onChange: v => { item.color = v; save(); } });
-        field(inspector, '动作类型', { value: item.submenu ? 'submenu' : item.action ? 'action' : 'empty', choices: [['empty', '空扇区 / 取消'], ['action', '插件动作'], ...(menu.id === 'main' ? [['submenu', '打开二级轮盘']] : [])], onChange: v => {
-          recordSnapshot('修改动作类型'); delete item.action; delete item.submenu;
-          if (v === 'action') item.action = { type: actions[0].type, id: actions[0].id };
-          if (v === 'submenu') {
-            const child = config.menus.find(m => m.id !== 'main');
-            if (child) { item.submenu = child.id; subMenuId = child.id; }
-            else item.submenu = createNewSubmenu();
-          }
-          save(); renderEditor();
-        } });
+      const parent = mainMenu().items[slotIndex];
+      if (!parent) { card(editor, '选择一级格子', '点击画布中的一级动作，才能添加或编辑属于它的二级动作。'); return; }
+      const isSub = subSlotIndex >= 0, menu = isSub ? sub : mainMenu(), index = isSub ? subSlotIndex : slotIndex, item = menu.items[index];
+      const inspector = card(editor, isSub ? `第 ${slotIndex + 1} 格 · 子动作 ${subSlotIndex + 1}` : `第 ${slotIndex + 1} 格 · 动作`); inspector.dataset.slotInspector = 'true';
+      inspector.append(element('p', 'stcj-settings-note', isSub ? '仅属于当前父格；在父角度外侧等分显示。' : formatDirectionBadge(slotIndex, mainMenu().items.length)));
+      if (isSub) button(inspector, '返回父动作', () => { subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews(); });
+      field(inspector, '动作名称', { value: item.label, aria: '动作名称', onChange: v => mutateSelected('修改动作名称', selected => { selected.label = v || '未设置'; }) });
+      const icons = copy(ICON_PRESETS); if (item.icon && !icons.some(i => i[0] === item.icon)) icons.push([item.icon, item.icon]);
+      field(inspector, '图标符号', { value: item.icon || '', choices: icons, onChange: v => mutateSelected('修改动作图标', selected => { if (v) selected.icon = v; else delete selected.icon; }) });
+      if (!item.submenu) {
+        field(inspector, '动作类型', { value: item.action ? 'action' : 'empty', choices: [['empty', '空动作 / 取消'], ['action', '插件动作']], onChange: v => mutateSelected('修改动作类型', selected => { delete selected.action; if (v === 'action' && actions[0]) selected.action = { type: actions[0].type, id: actions[0].id }; }) });
         if (item.action) {
           const choices = actions.map(a => [`${a.type}:${a.id}`, a.label]), selected = `${item.action.type}:${item.action.id}`;
-          if (!choices.some(c => c[0] === selected)) choices.push([selected, '未注册扩展动作（保留，不能执行）']);
-          field(inspector, '执行动作', { value: selected, choices, aria: `扇区 ${slotIndex + 1} 动作`, onChange: v => { recordSnapshot('修改执行动作'); const [type, ...id] = v.split(':'); item.action = { type, id: id.join(':') }; save(); } });
+          if (!choices.some(c => c[0] === selected)) choices.push([selected, '未注册动作（保留）']);
+          field(inspector, '执行动作', { value: selected, choices, onChange: v => mutateSelected('修改执行动作', selected => { const [type, ...id] = v.split(':'); selected.action = { type, id: id.join(':') }; }) });
         }
-        if (item.submenu) {
-          field(inspector, '目标二级轮盘', { value: item.submenu, choices: config.menus.filter(m => m.id !== 'main').map(m => [m.id, m.label]), onChange: v => { recordSnapshot('修改目标二级轮盘'); item.submenu = v; subMenuId = v; save(); renderEditor(); } });
-          button(inspector, '编辑这个二级轮盘 ›', () => selectMenu(item.submenu));
+      } else inspector.append(element('p', 'stcj-settings-note', '该一级格子打开二级动作。点击外侧子格编辑其动作。'));
+      const tools = element('div', 'stcj-editor-tools'); inspector.append(tools);
+      button(tools, '📋 复制动作', () => { clipboardSlot = copy(item); renderEditor(); });
+      button(tools, '📥 粘贴动作', () => mutateSelected('粘贴动作', selected => { const next = copy(clipboardSlot); delete next.submenu; const linked = selected.submenu; Object.keys(selected).forEach(k => delete selected[k]); Object.assign(selected, next); if (linked) { selected.submenu = linked; delete selected.action; } })).disabled = !clipboardSlot || !!item.submenu || !!clipboardSlot?.submenu;
+      if (isSub) button(tools, '删除此子动作', () => change('删除子动作', () => { const owned = ownChild(config, slotIndex); owned.items.splice(subSlotIndex, 1); subSlotIndex = -1; menuId = 'main'; }));
+      else button(tools, '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.submenu; selected.label = '未设置'; }));
+      const children = card(editor, '当前格子的二级动作'); children.dataset.inlineSubwheel = 'true';
+      if (sub) children.append(element('p', 'stcj-settings-note', `${sub.items.length} 个子动作；点击画布外侧格子编辑。${mainMenu().items.filter(i => i.submenu === sub.id).length > 1 ? '旧配置共享组：编辑时自动复制，仅影响当前父格。' : ''}`));
+      const add = button(children, '+ 添加二级动作', () => change('添加二级动作', () => { const child = addChild(config, slotIndex); subSlotIndex = child.items.length - 1; menuId = child.id; subMenuId = child.id; }));
+      add.disabled = !!sub && sub.items.length >= 12;
+      if (!sub && parent.action) children.append(element('p', 'stcj-settings-note', '添加时，现有一级动作会保留为第一个子动作。'));
+      if (!sub) {
+        const archived = archivedChildren(config);
+        if (archived.length) {
+          const archive = card(children, '保留的未绑定子动作', '旧孤立组或缩减后组保留数据，不作为独立整圈显示。可绑定到当前格。');
+          archived.forEach(group => button(archive, `绑定归档：${group.label}（${group.items.length} 项）`, () => change('绑定归档子动作', () => { const child = addChild(config, slotIndex, group.id); subSlotIndex = -1; subMenuId = child.id; menuId = 'main'; })));
         }
-        const tools = element('div', 'stcj-editor-tools'); inspector.append(tools);
-        for (const [text, direction] of [['↑ 上移', -1], ['↓ 下移', 1]]) {
-          button(tools, text, () => { recordSnapshot('调整扇区顺序'); const next = slotIndex + direction; [menu.items[slotIndex], menu.items[next]] = [menu.items[next], item]; slotIndex = next; save(); renderEditor(); }).disabled = slotIndex + direction < 0 || slotIndex + direction >= menu.items.length;
-        }
-        button(tools, '📋 复制扇区', () => { clipboardSlot = copy(item); status.textContent = `已复制「${item.label}」扇区配置`; renderEditor(); });
-        button(tools, '📥 粘贴扇区', () => { if (!clipboardSlot) return; recordSnapshot('粘贴扇区配置'); const nextItem = copy(clipboardSlot); if (menu.id !== 'main') delete nextItem.submenu; menu.items[slotIndex] = nextItem; save('已粘贴扇区配置'); renderEditor(); }).disabled = !clipboardSlot;
-        button(tools, '删除扇区', () => { recordSnapshot('删除扇区'); menu.items.splice(slotIndex, 1); slotIndex = Math.min(slotIndex, menu.items.length - 1); save(); renderEditor(); });
       }
-      renderInlineSubwheelEditor(editor);
     }
 
     const schemePage = page('schemes', '方案与备份', '保存内容和外观组合。应用方案不改变手势开关；导入默认也保留当前安全触发设置。');
@@ -524,7 +399,9 @@ export function createFeature({ dependencies }) {
     field(favorites, '收藏预览方式', { value: dependencies.loadFavoritesPreviewMode(), choices: [['swipe_default', '默认预览'], ['swipe_html', 'HTML 预览'], ['star_main', '主界面预览']], onChange: v => dependencies.saveFavoritesPreviewMode(v) });
     if (!status.parentNode) container.append(status);
     renderEditor(); renderAppearance(); renderSchemes(); renderPreviews();
-    if (window.ResizeObserver) { const observer = new ResizeObserver(renderPreviews); previews.forEach(p => observer.observe(p.canvas)); detachObserver = () => observer.disconnect(); }
+    const observer = window.ResizeObserver ? new ResizeObserver(renderPreviews) : null;
+    previews.forEach(p => observer?.observe(p.canvas));
+    detachObserver = () => { observer?.disconnect(); previews.forEach(p => p.dispose?.()); };
   }
   return { mountRadialSettings, destroyRadialSettings };
 }

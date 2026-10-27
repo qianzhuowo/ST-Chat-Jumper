@@ -14,3 +14,12 @@ test('welcome exception never ignores content, swipe payload, metadata or settin
 test('real chat timestamps are protected even when both snapshots identify real chat', () => {
   const a = fixture(); a.context.chatIdUnavailable = false; const b = structuredClone(a); b.chat[0].send_date = 'new'; assert.equal(sameProtectedState(a, b), false);
 });
+
+test('config comparison ignores object key order only and reports changed values and array positions', () => {
+ const {sameConfig,diffPaths}=require('./radial-state-guard.cjs');
+ const a={version:3,items:[{label:'A',id:1},{id:2,label:'B'}]};
+ const reordered={items:[{id:1,label:'A'},{label:'B',id:2}],version:3};
+ assert.equal(sameConfig(a,reordered),true);assert.deepEqual(diffPaths(a,reordered),[]);
+ const changed=structuredClone(a);changed.items[0].label='changed';assert.equal(sameConfig(a,changed),false);assert.deepEqual(diffPaths(a,changed),['/items/0/label']);
+ const swapped=structuredClone(a);swapped.items.reverse();assert.equal(sameConfig(a,swapped),false);assert.ok(diffPaths(a,swapped).includes('/items/0/id'));
+});

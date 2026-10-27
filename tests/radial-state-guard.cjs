@@ -20,4 +20,11 @@ function sameProtectedState(before, after) {
   const welcome = isSyntheticWelcome(before) && isSyntheticWelcome(after);
   return isDeepStrictEqual(comparable(before, welcome), comparable(after, welcome));
 }
-module.exports = { isSyntheticWelcome, sameProtectedState };
+function diffPaths(a, b, path = '') {
+  if (isDeepStrictEqual(a, b)) return [];
+  if (a && b && typeof a === 'object' && typeof b === 'object' && Array.isArray(a) === Array.isArray(b)) {
+    return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap(key => diffPaths(a[key], b[key], path + '/' + key));
+  }
+  return [path || '/'];
+}
+module.exports = { isSyntheticWelcome, sameProtectedState, diffPaths, sameConfig: isDeepStrictEqual };
