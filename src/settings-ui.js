@@ -129,7 +129,7 @@ export function createFeature({ state, dependencies }) {
     container.append(entry);
 
     const html = `
-      <dialog id="stcj-settings-window" data-stcj-settings data-console-mode="pro" data-sidebar-collapsed="false" class="stcj-settings-window" aria-labelledby="stcj-settings-title">
+      <dialog id="stcj-settings-window" data-stcj-settings data-sidebar-collapsed="false" class="stcj-settings-window" aria-labelledby="stcj-settings-title">
         <div class="stcj-settings-window-header">
           <div class="stcj-settings-brand">
             <button type="button" id="stcj-sidebar-toggle" class="stcj-sidebar-toggle" aria-expanded="true" aria-controls="stcj-settings-sidebar" aria-label="收起侧边导航" title="收起/展开侧边导航 (窄屏自动转为顶部标签)">☰</button>
@@ -140,10 +140,6 @@ export function createFeature({ state, dependencies }) {
             </div>
           </div>
           <div class="stcj-settings-header-tools">
-            <div class="stcj-console-mode-switch" role="group" aria-label="控制台显示密度">
-              <button type="button" data-console-mode-btn="simple" aria-pressed="false" title="精简展示常用核心设置">💡 简单模式</button>
-              <button type="button" data-console-mode-btn="pro" class="is-active" aria-pressed="true" title="展示全部高级微调参数">⚙️ 高级模式</button>
-            </div>
             <button type="button" id="stcj-settings-close" aria-label="关闭设置" title="关闭设置 (Esc)">×</button>
           </div>
         </div>
@@ -234,17 +230,6 @@ export function createFeature({ state, dependencies }) {
       dialog.dataset.sidebarCollapsed = String(nextCollapsed);
       sidebarToggle.setAttribute('aria-expanded', String(!nextCollapsed));
       sidebarToggle.setAttribute('aria-label', nextCollapsed ? '展开侧边导航' : '收起侧边导航');
-    });
-    dialog.querySelectorAll('[data-console-mode-btn]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mode = btn.dataset.consoleModeBtn;
-        dialog.dataset.consoleMode = mode;
-        dialog.querySelectorAll('[data-console-mode-btn]').forEach(other => {
-          const active = other === btn;
-          other.classList.toggle('is-active', active);
-          other.setAttribute('aria-pressed', String(active));
-        });
-      });
     });
     dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeSettingsWindow(); } });
     dialog.addEventListener('close', () => document.getElementById(PANEL_ID)?.focus({ preventScroll: true }));

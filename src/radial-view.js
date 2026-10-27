@@ -1,4 +1,5 @@
 import { normalizeRadialAppearance } from './radial-config.js';
+import { actionIconSvg, iconSvg } from './action-catalog.js';
 
 export const requiredServices = [];
 // Original browser renderer. Geometry is standard polar math, not a port of an upstream renderer.
@@ -51,8 +52,8 @@ export function resolveSubringBounds(radius, innerRadius, subAppearance, preview
   const subOuter = radius * 1.55;
   return { subInner, subOuter };
 }
-const symbols = { prev: '↑', next: '↓', recent1: '⇥', recent2: 'Ⅱ', recent3: 'Ⅲ', quickEdit: '✎', quickDelete: '×', quickPage: '›', quickPageLeft: '‹', showRange: '#', togglePin: '◇', toggleFavPanel: '▤', openFavoritesManager: '▦', currentHead: '↥', currentTail: '↧', toggleCollapse: '−', toggleOrientation: '↔', rangePrev: '‹', rangeNext: '›', resetRange: '↺' };
-export function shortcutSymbol(item) { return item.icon || (item.submenu ? '▦' : symbols[item.action?.id] || '·'); }
+// Same trusted SVG set as the floating toolbar (action-catalog.js); empty cells have no icon.
+export function sectorIconSvg(item) { return item?.submenu ? iconSvg('more') : actionIconSvg(item?.action); }
 
 function applyWheelVariables(target, a) {
   const variables = {
@@ -102,13 +103,14 @@ function buildRingButtons({ container, items, count, outerRadius, innerRadius, a
     content.style.top = `${outerRadius + Math.sin(angle) * distance}px`;
     content.style.width = `${Math.max(32, Math.min((outerRadius - innerRadius) * (tier === 'sub' ? 2.1 : 1.35), 2 * Math.PI * distance * arcFraction / Math.max(1, count) * .73))}px`;
     if (item.color) content.style.color = item.color;
-    if (appearance.showIcons) {
+    const svgMarkup = appearance.showIcons ? sectorIconSvg(item) : '';
+    if (svgMarkup) {
       const icon = document.createElement('span');
       icon.className = 'stcj-sector-icon';
-      icon.textContent = shortcutSymbol(item);
+      icon.innerHTML = svgMarkup;
       content.append(icon);
     }
-    if (appearance.showLabels) {
+    if (item.showLabel) {
       const label = document.createElement('span');
       label.className = 'stcj-sector-label';
       label.textContent = item.label;

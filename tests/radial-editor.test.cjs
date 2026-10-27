@@ -2,18 +2,25 @@ const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 let editor, config, bindCanvasSwap;
 before(async () => { editor = await import('../src/radial-editor.js'); config = await import('../src/radial-config.js'); ({ bindCanvasSwap } = await import('../src/radial-canvas-edit.js')); });
-test('v3 editing preserves orphan groups and binds new children only to a selected parent', () => {
-  const c = config.defaultRadialConfig(), before = structuredClone(c);
+const slot = (id, label) => ({ label, showLabel: true, action: { type: 'plugin', id } });
+function fixture() {
+  const c = config.defaultRadialConfig();
+  c.menus[0].items[1] = slot('next', '下一楼'); c.menus[0].items[5] = { label: '收藏', showLabel: true, submenu: 'favorites' };
+  c.menus.push({ id: 'favorites', label: '收藏', appearance: null, items: [slot('togglePin', '点选收藏'), slot('toggleFavPanel', '最近收藏'), slot('openFavoritesManager', '收藏管理')] });
+  return c;
+}
+test('v4 editing preserves orphan groups and binds new children only to a selected parent', () => {
+  const c = fixture(), before = structuredClone(c);
   assert.throws(() => editor.addChild(c, -1)); assert.deepEqual(c, before);
   assert.equal(editor.selectedChild(c, 0), null);
   const child = editor.addChild(c, 0); assert.equal(c.menus[0].items[0].submenu, child.id);
-  assert.equal(child.items[0].action.id, 'prev'); assert.equal(c.version, 3);
+  assert.equal(child.items[0].action.id, 'prev'); assert.equal(c.version, 4);
   editor.resizePrimary(c, 4); assert.ok(editor.archivedChildren(c).some(m => m.id === 'favorites'));
   assert.equal(c.menus.find(m => m.id === 'favorites').items.length, 3);
   assert.ok(editor.affectedByShrink(before, 4).some(s => s.includes('3 个子动作')));
 });
 test('shared v3 children clone on edit and swap carries the parent binding', () => {
-  const c = config.defaultRadialConfig(); c.menus[0].items[0] = { label: 'shared', submenu: 'favorites' };
+  const c = fixture(); c.menus[0].items[0] = { label: 'shared', submenu: 'favorites' };
   const original = structuredClone(editor.selectedChild(c, 5));
   const isolated = editor.ownChild(c, 0); isolated.items[0].label = 'only this parent';
   assert.notEqual(isolated.id, 'favorites'); assert.deepEqual(editor.selectedChild(c, 5), original);
@@ -23,7 +30,7 @@ test('shared v3 children clone on edit and swap carries the parent binding', () 
   assert.throws(() => editor.resizePrimary(c, 6));
 });
 test('capacity failure does not mutate a shared group, and archives retain direct parent action on binding', () => {
-  const c = config.defaultRadialConfig(); c.menus[0].items[0] = { label: 'shared', submenu: 'favorites' };
+  const c = fixture(); c.menus[0].items[0] = { label: 'shared', submenu: 'favorites' };
   while (c.menus.length < 17) c.menus.push({ id: 'unused-' + c.menus.length, label: 'unused', items: [] });
   const snapshot = structuredClone(c); assert.throws(() => editor.ownChild(c, 0)); assert.deepEqual(c, snapshot);
   delete c.menus[0].items[0].submenu; delete c.menus[0].items[5].submenu;

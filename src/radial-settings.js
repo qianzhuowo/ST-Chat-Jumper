@@ -2,6 +2,7 @@ import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, re
 import { bindCanvasSwap } from './radial-canvas-edit.js';
 import { resolveWheelAppearance } from './radial-view.js';
 import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
+import { ACTION_TYPES, actionTypeOf, actionTypeLabel } from './action-catalog.js';
 
 export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode'];
 
@@ -9,7 +10,6 @@ const copy = value => JSON.parse(JSON.stringify(value));
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
 const COMPASS_8 = ['↑ 上 (N)', '↗ 右上 (NE)', '→ 右 (E)', '↘ 右下 (SE)', '↓ 下 (S)', '↙ 左下 (SW)', '← 左 (W)', '↖ 左上 (NW)'];
 const COMPASS_4 = ['↑ 上 (N)', '→ 右 (E)', '↓ 下 (S)', '← 左 (W)'];
-const ICON_PRESETS = [['', '自动图标'], ['↑', '↑ 上'], ['↓', '↓ 下'], ['✎', '✎ 编辑'], ['◇', '◇ 收藏'], ['▦', '▦ 菜单'], ['#', '# 楼层'], ['↺', '↺ 恢复'], ['·', '· 简洁']];
 function formatDirectionBadge(index, count) {
   if (count === 4) return COMPASS_4[index] || `方位 ${index + 1}`;
   if (count === 8) return COMPASS_8[index] || `方位 ${index + 1}`;
@@ -269,7 +269,7 @@ export function createFeature({ dependencies }) {
         return field(parent, title, { ...options, disabled, value: a[key], onChange: (v, input) => {
           if (!target || !beginAppearanceEdit('修改轮盘外观')) return; target[key] = v; Object.assign(target, normalizeRadialAppearance(target));
           if (input.type !== 'checkbox') input.value = target[key]; save();
-          if (key === 'showIcons' || key === 'showLabels') { renderAppearance(); renderEditor(); }
+          if (key === 'showIcons') { renderAppearance(); renderEditor(); }
         } });
       }
       field(palette, '配色方案', { choices: Object.entries(RADIAL_THEMES).map(([id, t]) => [id, t.label]), value: a.theme, disabled, onChange: v => {
@@ -285,7 +285,7 @@ export function createFeature({ dependencies }) {
         if (menu.id !== 'main' && ['rotation', 'scale', 'innerRatio'].includes(key)) continue;
         styleField(geometry, title, key, { type: 'range', min, max, live: true, proOnly });
       }
-      styleField(geometry, '显示图标', 'showIcons', { type: 'checkbox' }); styleField(geometry, '显示标签', 'showLabels', { type: 'checkbox' });
+      styleField(geometry, '显示图标', 'showIcons', { type: 'checkbox', hint: '名称显示在「扇区与动作」中按格子单独设置。' });
       const centerInput = styleField(geometry, '中心核符号', 'centerSymbol', { type: 'text', hint: '仅文本符号，不加载图片或外部字体。', proOnly: true }); centerInput.maxLength = 6;
       button(geometry, '重置当前外观', () => { if (!beginAppearanceEdit('重置当前外观')) return; if (menu.id === 'main') { config.appearance = defaultRadialAppearance(); menu.appearance = null; } else menu.appearance = defaultRadialAppearance(); save(); renderAppearance(); renderEditor(); });
     }
@@ -323,25 +323,42 @@ export function createFeature({ dependencies }) {
       const parent = mainMenu().items[slotIndex];
       if (!parent) { card(editor, '选择一级格子', '点击画布中的一级动作，才能添加或编辑属于它的二级动作。'); return; }
       const isSub = subSlotIndex >= 0, menu = isSub ? sub : mainMenu(), index = isSub ? subSlotIndex : slotIndex, item = menu.items[index];
-      const inspector = card(editor, isSub ? `第 ${slotIndex + 1} 格 · 子动作 ${subSlotIndex + 1}` : `第 ${slotIndex + 1} 格 · 动作`); inspector.dataset.slotInspector = 'true';
-      inspector.append(element('p', 'stcj-settings-note', isSub ? '仅属于当前父格；在父角度外侧等分显示。' : formatDirectionBadge(slotIndex, mainMenu().items.length)));
+      const inspector = card(editor); inspector.dataset.slotInspector = 'true';
+      const head = element('div', 'stcj-inspector-head'); inspector.append(head);
+      const typeName = actionTypeLabel(item);
+      head.append(element('h3', '', isSub ? `第 ${slotIndex + 1} 格 · 子动作 ${subSlotIndex + 1} · ${typeName}` : `第 ${slotIndex + 1} 格 · ${typeName}`));
+      head.append(element('span', 'stcj-direction-badge', isSub ? '父格外侧' : formatDirectionBadge(slotIndex, mainMenu().items.length)));
+      if (isSub) inspector.append(element('p', 'stcj-settings-note', '仅属于当前父格；在父角度外侧等分显示。'));
       if (isSub) button(inspector, '返回父动作', () => { subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews(); });
       field(inspector, '动作名称', { value: item.label, aria: '动作名称', onChange: v => mutateSelected('修改动作名称', selected => { selected.label = v || '未设置'; }) });
-      const icons = copy(ICON_PRESETS); if (item.icon && !icons.some(i => i[0] === item.icon)) icons.push([item.icon, item.icon]);
-      field(inspector, '图标符号', { value: item.icon || '', choices: icons, onChange: v => mutateSelected('修改动作图标', selected => { if (v) selected.icon = v; else delete selected.icon; }) });
+      field(inspector, '在轮盘上显示名称', { type: 'checkbox', value: !!item.showLabel, aria: '在轮盘上显示名称', onChange: v => mutateSelected(v ? '显示动作名称' : '隐藏动作名称', selected => { selected.showLabel = v; }) });
       if (!item.submenu) {
-        field(inspector, '动作类型', { value: item.action ? 'action' : 'empty', choices: [['empty', '空动作 / 取消'], ['action', '插件动作']], onChange: v => mutateSelected('修改动作类型', selected => { delete selected.action; if (v === 'action' && actions[0]) selected.action = { type: actions[0].type, id: actions[0].id }; }) });
+        const type = actionTypeOf(item);
+        const typeChoices = Object.entries(ACTION_TYPES).map(([id, t]) => [id, t.label]);
+        if (!typeChoices.some(c => c[0] === type)) typeChoices.push([type, `${type}（未支持，保留）`]);
+        field(inspector, '动作类型', { value: type, choices: typeChoices, onChange: v => mutateSelected('修改动作类型', selected => {
+          const first = actions.find(a => a.type === v);
+          if (v !== 'empty' && !first) throw new Error('该动作类型暂无可用动作；未修改配置');
+          delete selected.action;
+          if (first) { selected.action = { type: first.type, id: first.id }; if (!selected.label || selected.label === '未设置') selected.label = first.label; selected.showLabel = true; }
+          else selected.showLabel = false;
+        }) });
         if (item.action) {
-          const choices = actions.map(a => [`${a.type}:${a.id}`, a.label]), selected = `${item.action.type}:${item.action.id}`;
+          const choices = actions.filter(a => a.type === item.action.type).map(a => [`${a.type}:${a.id}`, a.label]), selected = `${item.action.type}:${item.action.id}`;
           if (!choices.some(c => c[0] === selected)) choices.push([selected, '未注册动作（保留）']);
-          field(inspector, '执行动作', { value: selected, choices, onChange: v => mutateSelected('修改执行动作', selected => { const [type, ...id] = v.split(':'); selected.action = { type, id: id.join(':') }; }) });
+          field(inspector, '执行动作', { value: selected, choices, onChange: v => mutateSelected('修改执行动作', selected => {
+            const [type, ...id] = v.split(':'); const previous = actions.find(a => a.type === selected.action?.type && a.id === selected.action?.id);
+            selected.action = { type, id: id.join(':') };
+            const next = actions.find(a => a.type === type && a.id === selected.action.id);
+            if (next && (!selected.label || selected.label === '未设置' || selected.label === previous?.label)) selected.label = next.label;
+          }) });
         }
       } else inspector.append(element('p', 'stcj-settings-note', '该一级格子打开二级动作。点击外侧子格编辑其动作。'));
       const tools = element('div', 'stcj-editor-tools'); inspector.append(tools);
       button(tools, '📋 复制动作', () => { clipboardSlot = copy(item); renderEditor(); });
       button(tools, '📥 粘贴动作', () => mutateSelected('粘贴动作', selected => { const next = copy(clipboardSlot); delete next.submenu; const linked = selected.submenu; Object.keys(selected).forEach(k => delete selected[k]); Object.assign(selected, next); if (linked) { selected.submenu = linked; delete selected.action; } })).disabled = !clipboardSlot || !!item.submenu || !!clipboardSlot?.submenu;
       if (isSub) button(tools, '删除此子动作', () => change('删除子动作', () => { const owned = ownChild(config, slotIndex); owned.items.splice(subSlotIndex, 1); subSlotIndex = -1; menuId = 'main'; }));
-      else button(tools, '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.submenu; selected.label = '未设置'; }));
+      else button(tools, '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.submenu; selected.label = '未设置'; selected.showLabel = false; }));
       const children = card(editor, '当前格子的二级动作'); children.dataset.inlineSubwheel = 'true';
       if (sub) children.append(element('p', 'stcj-settings-note', `${sub.items.length} 个子动作；点击画布外侧格子编辑。${mainMenu().items.filter(i => i.submenu === sub.id).length > 1 ? '旧配置共享组：编辑时自动复制，仅影响当前父格。' : ''}`));
       const add = button(children, '+ 添加二级动作', () => change('添加二级动作', () => { const child = addChild(config, slotIndex); subSlotIndex = child.items.length - 1; menuId = child.id; subMenuId = child.id; }));
@@ -357,7 +374,7 @@ export function createFeature({ dependencies }) {
     }
 
     const schemePage = page('schemes', '方案与备份', '保存内容和外观组合。应用方案不改变手势开关；导入默认也保留当前安全触发设置。');
-    const schemes = card(schemePage, '自定义方案', '最多 8 套，包含所有一二级轮盘、图标、外观和基础尺寸。');
+    const schemes = card(schemePage, '自定义方案', '最多 8 套，包含所有一二级动作、名称显示、外观和基础尺寸。');
     let schemeName = '我的轮盘'; field(schemes, '方案名称', { value: schemeName, onChange: v => { schemeName = v || '我的轮盘'; } });
     const schemeList = element('div', 'stcj-scheme-list'); schemes.append(schemeList);
     const addScheme = button(schemes, '保存当前配置为新方案', () => { if (config.schemes.length >= 8) return; let n = 1; while (config.schemes.some(s => s.id === `scheme-${n}`)) n++; config.schemes.push({ id: `scheme-${n}`, label: schemeName, menus: copy(config.menus), appearance: copy(config.appearance), radius: config.radius }); save('已保存命名方案'); renderSchemes(); });
@@ -380,7 +397,7 @@ export function createFeature({ dependencies }) {
       try {
         if (json.value.length > 1000000) throw new Error('配置超过100万字符上限');
         const raw = JSON.parse(json.value);
-        if (!raw || !Array.isArray(raw.menus) || raw.version !== RADIAL_CONFIG_VERSION) throw new Error('仅支持 v3 轮盘配置；旧内部测试配置已停用');
+        if (!raw || !Array.isArray(raw.menus) || raw.version !== RADIAL_CONFIG_VERSION) throw new Error('仅支持 v4 轮盘配置；旧版本配置已停用');
         const next = normalizeRadialConfig(raw);
         for (const key of includeTriggers ? Object.keys(next) : ['menus', 'appearance', 'radius', 'schemes', 'panelTheme']) config[key] = next[key];
         config.cancelDistance = Math.max(config.cancelDistance, config.radius + 40); undo.clear(); menuId = 'main';

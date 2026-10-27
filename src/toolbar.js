@@ -1,4 +1,5 @@
 import * as constants from './constants.js';
+import { actionIconSvg } from './action-catalog.js';
 
 // Explicit cross-feature service contract; linked once by application.js.
 export const requiredServices = [
@@ -470,12 +471,12 @@ export function createFeature({ state, dependencies }) {
 
     root.innerHTML = `
       <div class="stcj-btn stcj-mini stcj-collapse" data-action="toggleCollapse"></div>
-      <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">${constants.ICONS.num(3)}</div>
-      <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">${constants.ICONS.num(2)}</div>
-      <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">${constants.ICONS.num(1)}</div>
-      <div class="stcj-btn" data-action="quickPage" title="快速翻页(右)：点击最新楼层的右翻页按钮">${constants.ICONS.fastForward}</div>
-      <div class="stcj-btn" data-action="quickPageLeft" title="快速翻页(左)：点击最新楼层的左翻页按钮">${constants.ICONS.fastBackward}</div>
-      <div class="stcj-btn" data-action="showRange" title="跳转/区间显示（输入楼层号或区间）">${constants.ICONS.range}</div>
+      <div class="stcj-btn" data-action="recent3" title="最近第3楼（跳到头部）">${actionIconSvg('recent3')}</div>
+      <div class="stcj-btn" data-action="recent2" title="最近第2楼（跳到头部）">${actionIconSvg('recent2')}</div>
+      <div class="stcj-btn" data-action="recent1" title="最近第1楼（跳到头部）">${actionIconSvg('recent1')}</div>
+      <div class="stcj-btn" data-action="quickPage" title="快速翻页(右)：点击最新楼层的右翻页按钮">${actionIconSvg('quickPage')}</div>
+      <div class="stcj-btn" data-action="quickPageLeft" title="快速翻页(左)：点击最新楼层的左翻页按钮">${actionIconSvg('quickPageLeft')}</div>
+      <div class="stcj-btn" data-action="showRange" title="跳转/区间显示（输入楼层号或区间）">${actionIconSvg('showRange')}</div>
       <div class="stcj-range-stack stcj-hidden" aria-hidden="true">
         <div class="stcj-range-chip" aria-live="polite" aria-hidden="true">
           <div class="stcj-btn stcj-mini stcj-range-nav" data-action="rangePrev" title="向前扩展区间">${constants.ICONS.chevronLeft}</div>
@@ -490,14 +491,14 @@ export function createFeature({ state, dependencies }) {
       <div class="stcj-btn stcj-toggle" data-action="toggleOrientation"></div>
       <div class="stcj-btn" data-action="prev" title="上一楼（跳到头部）"></div>
       <div class="stcj-btn" data-action="next" title="下一楼（跳到头部）"></div>
-      <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">${constants.ICONS.head}</div>
-      <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">${constants.ICONS.tail}</div>
-      <div class="stcj-btn" data-action="quickEdit" title="快速编辑：选中文字可高亮定位；无选中则编辑当前楼层">${constants.ICONS.pencil}</div>
-      <div class="stcj-btn" data-action="quickDelete" title="快速删除：选中某楼文字则删除该楼；无选中则删除最新楼层">${constants.ICONS.trash}</div>
+      <div class="stcj-btn" data-action="currentHead" title="当前楼层：对齐到头部">${actionIconSvg('currentHead')}</div>
+      <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">${actionIconSvg('currentTail')}</div>
+      <div class="stcj-btn" data-action="quickEdit" title="快速编辑：选中文字可高亮定位；无选中则编辑当前楼层">${actionIconSvg('quickEdit')}</div>
+      <div class="stcj-btn" data-action="quickDelete" title="快速删除：选中某楼文字则删除该楼；无选中则删除最新楼层">${actionIconSvg('quickDelete')}</div>
 
       <div class="stcj-pin-group">
-        <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${constants.ICONS.pin}</div>
-        <div class="stcj-btn stcj-favorites-manager" data-action="openFavoritesManager" title="打开收藏管理器">${constants.ICONS.folder}</div>
+        <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${actionIconSvg('togglePin')}</div>
+        <div class="stcj-btn stcj-favorites-manager" data-action="openFavoritesManager" title="打开收藏管理器">${actionIconSvg('openFavoritesManager')}</div>
         <div class="stcj-btn stcj-pin-arrow" data-action="toggleFavPanel"></div>
       </div>
 

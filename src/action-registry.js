@@ -1,8 +1,10 @@
-import { CONFIGURABLE_BUTTONS } from './constants.js';
+import { ACTION_CATALOG } from './action-catalog.js';
 export const requiredServices = ['handleAction', 'toastInfo'];
 
 // No DOM clicks, eval, or host-private imports. Future action providers register
 // a namespaced ID and handler and keep their own host capability checks.
+// Built-in plugin actions come from action-catalog.js, so a new catalog entry is
+// automatically available to the radial settings picker.
 export function createFeature({ dependencies }) {
   const actions = new Map();
   function registerShortcutAction(action) {
@@ -12,10 +14,8 @@ export function createFeature({ dependencies }) {
     actions.set(key, { ...action });
     return () => actions.delete(key);
   }
-  const builtin = CONFIGURABLE_BUTTONS.filter(b => b.id !== 'pinGroup');
-  builtin.push({ id: 'togglePin', label: '点选收藏' }, { id: 'toggleFavPanel', label: '最近收藏' }, { id: 'openFavoritesManager', label: '收藏管理' }, { id: 'rangePrev', label: '区间上一页' }, { id: 'rangeNext', label: '区间下一页' }, { id: 'resetRange', label: '恢复区间' });
-  for (const item of builtin) registerShortcutAction({ type: 'plugin', ...item, execute: () => dependencies.handleAction(item.id === 'toggleFavPanel' ? 'openFavoritesManager' : item.id) });
-  function listShortcutActions() { return [...actions.values()].map(({ type, id, label }) => ({ type, id, label })); }
+  for (const item of ACTION_CATALOG) registerShortcutAction({ type: 'plugin', id: item.id, label: item.label, icon: item.icon, execute: () => dependencies.handleAction(item.run || item.id) });
+  function listShortcutActions() { return [...actions.values()].map(({ type, id, label, icon }) => ({ type, id, label, icon })); }
   async function executeShortcutAction(ref) {
     const action = actions.get(`${ref?.type}:${ref?.id}`);
     if (!action) { dependencies.toastInfo('此轮盘动作尚未注册或不可用'); return false; }

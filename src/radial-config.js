@@ -1,7 +1,7 @@
 import { EXT_SETTINGS_KEY } from './constants.js';
 
 export const requiredServices = [];
-export const RADIAL_CONFIG_VERSION = 3;
+export const RADIAL_CONFIG_VERSION = 4;
 // Only this dedicated namespace is migrated; toolbar/favorites/host data stay intact.
 export function migrateRadialSettings(extensionSettings) {
   const settings = extensionSettings?.[EXT_SETTINGS_KEY];
@@ -20,7 +20,7 @@ export const RADIAL_THEMES = {
 export function defaultRadialAppearance(theme = 'graphite') {
   const id = typeof theme === 'string' && Object.prototype.hasOwnProperty.call(RADIAL_THEMES, theme) ? theme : 'graphite';
   const palette = RADIAL_THEMES[id];
-  return { ...palette, theme: id, shape: 'ring', gap: 3, innerRatio: 46, rotation: 0, fontSize: 12, scale: 100, opacity: 96, glow: 14, showLabels: true, showIcons: true, centerSymbol: '×' };
+  return { ...palette, theme: id, shape: 'ring', gap: 3, innerRatio: 46, rotation: 0, fontSize: 12, scale: 100, opacity: 96, glow: 14, showIcons: true, centerSymbol: '×' };
 }
 export function normalizeRadialAppearance(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
@@ -28,20 +28,19 @@ export function normalizeRadialAppearance(raw) {
   for (const key of ['surface', 'highlight', 'text', 'border', 'accent', 'center']) if (typeof r[key] === 'string' && /^#[0-9a-f]{6}$/i.test(r[key])) result[key] = r[key];
   result.shape = ['ring', 'petals', 'solid'].includes(r.shape) ? r.shape : result.shape;
   for (const [key, min, max] of [['gap', 0, 16], ['innerRatio', 25, 65], ['rotation', -180, 180], ['fontSize', 10, 20], ['scale', 70, 130], ['opacity', 45, 100], ['glow', 0, 30]]) result[key] = number(r[key], result[key], min, max);
-  for (const key of ['showLabels', 'showIcons']) result[key] = bool(r[key], result[key]);
-  if (!result.showLabels && !result.showIcons) result.showLabels = true;
+  result.showIcons = bool(r.showIcons, result.showIcons);
   if (typeof r.centerSymbol === 'string') result.centerSymbol = [...r.centerSymbol].slice(0, 3).join('') || '×';
   return result;
 }
-const slot = (id, label) => ({ label, action: { type: 'plugin', id } });
+const slot = (id, label) => ({ label, showLabel: true, action: { type: 'plugin', id } });
+const empty = () => ({ label: '未设置', showLabel: false });
 export function defaultRadialConfig() {
   return {
     version: RADIAL_CONFIG_VERSION, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
     keyboardEnabled: true, key: 'j', keyModifier: 'altShift', touchMode: 'off', scope: 'chat',
     threshold: 24, longPress: 550, tapCount: 2, tapInterval: 320, radius: 120,
     deadZone: 28, cancelDistance: 240, submenuDelay: 400,
-    menus: [{ id: 'main', label: '主轮盘', items: [slot('prev', '上一楼'), slot('next', '下一楼'), slot('recent1', '最新楼'), slot('quickEdit', '快速编辑'), slot('showRange', '跳转/区间'), { label: '收藏', submenu: 'favorites' }] },
-      { id: 'favorites', label: '收藏', items: [slot('togglePin', '点选收藏'), slot('toggleFavPanel', '最近收藏'), slot('openFavoritesManager', '收藏管理')] }],
+    menus: [{ id: 'main', label: '主轮盘', items: [slot('prev', '上一楼'), empty(), slot('recent1', '最新楼'), empty(), slot('next', '下一楼'), empty(), slot('quickEdit', '编辑'), empty()] }],
   };
 }
 export function normalizeRadialConfig(raw) {
@@ -63,10 +62,11 @@ export function normalizeRadialConfig(raw) {
     items: (Array.isArray(m.items) ? m.items : []).slice(0, 12).map(item => {
       const i = item && typeof item === 'object' ? item : {};
       const s = { label: String(i.label || '未设置').slice(0, 40) };
-      if (typeof i.icon === 'string') s.icon = [...i.icon].slice(0, 4).join('');
       if (typeof i.color === 'string' && /^#[0-9a-f]{6}$/i.test(i.color)) s.color = i.color;
       if (typeof i.submenu === 'string') s.submenu = i.submenu.slice(0, 40);
       else if (i.action && typeof i.action.type === 'string' && typeof i.action.id === 'string') s.action = { type: i.action.type.slice(0, 40), id: i.action.id.slice(0, 100) };
+      // Per-cell label visibility; when absent, cells with an action show their name.
+      s.showLabel = typeof i.showLabel === 'boolean' ? i.showLabel : !!(s.action || s.submenu);
       return s;
     }),
   }));

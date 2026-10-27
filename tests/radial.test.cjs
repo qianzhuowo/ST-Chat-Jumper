@@ -83,11 +83,18 @@ class Element extends Target {
 }
 const chatTarget = { closest: selector => selector === '#chat' ? chatTarget : null };
 const inputTarget = { closest: selector => selector === '#chat' ? chatTarget : inputTarget };
+// Explicit 6-cell fixture with a favorites child group. Gesture/editor tests use it so
+// they do not depend on the shipped default layout (covered by its own tests).
+const fixtureSlot = (id, label) => ({ label, showLabel: true, action: { type: 'plugin', id } });
+function legacyMenus() {
+  return [{ id: 'main', label: '主轮盘', appearance: null, items: [fixtureSlot('prev', '上一楼'), fixtureSlot('next', '下一楼'), fixtureSlot('recent1', '最新楼'), fixtureSlot('quickEdit', '快速编辑'), fixtureSlot('showRange', '跳转/区间'), { label: '收藏', showLabel: true, submenu: 'favorites' }] },
+    { id: 'favorites', label: '收藏', appearance: null, items: [fixtureSlot('togglePin', '点选收藏'), fixtureSlot('toggleFavPanel', '最近收藏'), fixtureSlot('openFavoritesManager', '收藏管理')] }];
+}
 function runtime(overrides = {}) {
   const document = new Target(); document.body = new Element('body'); document.createElement = tag => new Element(tag); document.createElementNS = (_, tag) => new Element(tag); document.createTextNode = text => { const t = new Element('#text'); t.textContent = text; return t; }; document.activeElement = new Element();
   const window = new Target();
   Object.assign(globalThis, { document, window, innerWidth: 1000, innerHeight: 700 });
-  const config = { ...configModule.defaultRadialConfig(), enabled: true, mouseEnabled: true, ...overrides };
+  const config = { ...configModule.defaultRadialConfig(), menus: legacyMenus(), enabled: true, mouseEnabled: true, ...overrides };
   const executed = [];
   const services = radialModule.createFeature({ dependencies: { ...viewModule.createFeature(), getRadialConfig: () => config, executeShortcutAction: async a => executed.push(a) } });
   services.installRadialGestures();
@@ -204,17 +211,17 @@ test('registry dispatches without toolbar DOM and fails closed for unknown futur
 test('normalizer validates shape independently of persisted schema migration', () => {
   const old = { version: 1, enabled: true, touchMode: 'multiTap', radius: 100, menus: [{ id: 'main', label: 'Old', items: [{ label: 'One', action: { type: 'future', id: 'card' } }, { label: 'Two', submenu: 'child' }] }, { id: 'child', label: 'Child', items: [{ label: 'Three', action: { type: 'plugin', id: 'next' } }] }] };
   const original = JSON.stringify(old), next = configModule.normalizeRadialConfig(old);
-  assert.equal(next.version, 3); assert.equal(next.enabled, true); assert.equal(next.touchMode, 'multiTap'); assert.equal(next.radius, 100);
+  assert.equal(next.version, 4); assert.equal(next.enabled, true); assert.equal(next.touchMode, 'multiTap'); assert.equal(next.radius, 100);
   assert.deepEqual(next.menus[0].items.map(i => i.label), ['One', 'Two']); assert.equal(next.menus[0].items[0].action.type, 'future'); assert.equal(next.menus[0].items[1].submenu, 'child'); assert.equal(next.menus[1].appearance, null);
   assert.equal(next.appearance.theme, 'graphite'); assert.deepEqual(next.schemes, []); assert.equal(JSON.stringify(old), original);
 });
-test('appearance validates colors and inherited palette names, and always retains a visible label or icon', () => {
+test('appearance validates colors and inherited palette names, and leaves label visibility to each cell', () => {
   for (const theme of ['__proto__', 'constructor', 'toString', 'unknown']) {
     const a = configModule.normalizeRadialAppearance({ theme }); assert.equal(a.theme, 'graphite');
     for (const key of ['surface', 'highlight', 'accent', 'border', 'text', 'center']) assert.match(a[key], /^#[0-9a-f]{6}$/i);
   }
   const a = configModule.normalizeRadialAppearance({ theme: 'porcelain', surface: 'url(javascript:bad)', accent: '#123456', gap: 999, rotation: -999, showLabels: false, showIcons: false, centerSymbol: '123456' });
-  assert.equal(a.surface, '#f6f8fb'); assert.equal(a.accent, '#123456'); assert.equal(a.gap, 16); assert.equal(a.rotation, -180); assert.equal(a.showLabels, true); assert.equal(a.centerSymbol, '123');
+  assert.equal(a.surface, '#f6f8fb'); assert.equal(a.accent, '#123456'); assert.equal(a.gap, 16); assert.equal(a.rotation, -180); assert.equal(a.showIcons, false); assert.equal('showLabels' in a, false); assert.equal(a.centerSymbol, '123');
 });
 test('imported main appearance becomes the single editable global appearance, while children remain independent', () => {
   const config = configModule.normalizeRadialConfig({ appearance: { theme: 'graphite' }, menus: [{ id: 'main', appearance: { theme: 'porcelain' }, items: [] }, { id: 'child', appearance: { theme: 'forest' }, items: [] }] });
@@ -233,7 +240,7 @@ test('small wheel geometry caps the effective cancel zone and keeps the painted 
 test('named schemes are bounded snapshots with normalized menus, not recursive configurations', () => {
   const menus = [{ id: 'main', items: [{ label: 'Saved', icon: '◇', color: '#123456', action: { type: 'plugin', id: 'next' } }] }];
   const result = configModule.normalizeRadialConfig({ schemes: [{ id: 'one', label: 'One', menus, radius: 900, appearance: { theme: 'forest' }, schemes: [{ id: 'nested' }] }, { id: 'one' }, { id: '../invalid' }] });
-  assert.equal(result.schemes.length, 1); assert.equal(result.schemes[0].radius, 200); assert.equal(result.schemes[0].menus[0].items[0].icon, '◇'); assert.equal(result.schemes[0].appearance.theme, 'forest'); assert.equal(result.schemes[0].schemes, undefined);
+  assert.equal(result.schemes.length, 1); assert.equal(result.schemes[0].radius, 200); assert.equal(result.schemes[0].menus[0].items[0].icon, undefined); assert.equal(result.schemes[0].menus[0].items[0].showLabel, true); assert.equal(result.schemes[0].appearance.theme, 'forest'); assert.equal(result.schemes[0].schemes, undefined);
   menus[0].items[0].label = 'Changed'; assert.equal(result.schemes[0].menus[0].items[0].label, 'Saved');
 });
 test('original annular geometry is finite for 1, 4, 8 and 12 sectors and matches rotated hit testing', () => {
@@ -352,10 +359,9 @@ test('co-screen submenu renders primary and secondary rings together, locks pare
   r.services.destroyRadial();
 });
 
-test('settings UI supports same-page primary/secondary free editing, co-screen preview, theme sync, copy/paste, undo/redo, and simple mode', () => {
+test('settings UI supports same-page primary/secondary free editing, co-screen preview, theme sync, copy/paste and undo/redo', () => {
   const r = runtime();
   const dialog = new Element('dialog');
-  dialog.dataset.consoleMode = 'pro';
   dialog.dataset.sidebarCollapsed = 'false';
   const themeHostBtn = new Element('button'); themeHostBtn.dataset.panelThemeBtn = 'host';
   const themeLightBtn = new Element('button'); themeLightBtn.dataset.panelThemeBtn = 'light';
@@ -429,10 +435,6 @@ test('settings UI supports same-page primary/secondary free editing, co-screen p
   assert.ok(child); assert.equal(child.items[0].action.id, 'prev', 'former direct action retained');
   assert.equal(child.items.length, 2); assert.equal(r.executed.length, 0, 'editor never runs actions');
 
-  // 4. Simple mode toggle does not lose or alter saved config
-  const snapshotBeforeSimple = JSON.stringify(savedConfig);
-  dialog.dataset.consoleMode = 'simple';
-  assert.equal(JSON.stringify(savedConfig), snapshotBeforeSimple);
   assert.ok(savedCount > 0);
   settingsFeature.destroyRadialSettings();
   r.services.destroyRadial();
@@ -465,13 +467,13 @@ test('sidebar collapse toggle syncs aria-expanded and retains accessible names f
 });
 
 
-test('v3 migration resets only radial including old schemes and runs once', () => {
-  for (const version of [undefined, 1, 2]) {
+test('v4 migration resets only radial including old v3 schemes and runs once', () => {
+  for (const version of [undefined, 1, 2, 3]) {
     const settings = { 'ST-Chat-Jumper': { toolbar: { order: ['prev'] }, favorites: ['keep'], other: 42, radial: { version, enabled: true, schemes: [{ id: 'legacy' }], menus: [] } }, unrelated: { token: 'keep' } };
     const toolbar = settings['ST-Chat-Jumper'].toolbar;
     const before = structuredClone(settings); delete before['ST-Chat-Jumper'].radial;
     assert.equal(configModule.migrateRadialSettings(settings), true);
-    assert.equal(settings['ST-Chat-Jumper'].radial.version, 3);
+    assert.equal(settings['ST-Chat-Jumper'].radial.version, 4);
     assert.deepEqual(settings['ST-Chat-Jumper'].radial.schemes, []);
     assert.equal(settings['ST-Chat-Jumper'].radial.enabled, false);
     const radial = settings['ST-Chat-Jumper'].radial; radial.enabled = true;
@@ -496,9 +498,9 @@ test('legacy JSON imports are gated on the current schema', () => {
   assert.ok(!source.includes('同页二级起始旋转'));
 });
 
-function editorReviewFixture() {
-  const r = runtime();
-  r.config.menus[0].items[0] = { label:'Shared first', submenu:'favorites' };
+function editorReviewFixture(overrides) {
+  const r = runtime(overrides);
+  if (!overrides) r.config.menus[0].items[0] = { label:'Shared first', submenu:'favorites' };
   const dialog = new Element('dialog'), mount = new Element('div'); dialog.append(mount);r.document.body.append(dialog);
   let saved = r.config, writes=0;
   const feature = radialSettingsModule.createFeature({dependencies:{
@@ -531,4 +533,61 @@ test('shared appearance selector identifies the parent and isolates only the sel
   assert.equal(first.submenu,'favorites'); assert.notEqual(second.submenu,'favorites');
   assert.equal(c.menus.find(m=>m.id==='favorites').appearance,null);assert.ok(c.menus.find(m=>m.id===second.submenu).appearance);
   f.feature.destroyRadialSettings();f.r.services.destroyRadial();
+});
+
+test('action catalog is the single source for toolbar icons, registry and radial picker', async () => {
+  const catalog = await import('../src/action-catalog.js');
+  const constants = await import('../src/constants.js');
+  const fs = require('node:fs'), path = require('node:path');
+  const ids = catalog.ACTION_CATALOG.map(a => a.id);
+  assert.equal(new Set(ids).size, ids.length, 'catalog ids are unique');
+  for (const b of constants.CONFIGURABLE_BUTTONS.filter(b => b.id !== 'pinGroup')) assert.ok(ids.includes(b.id), `toolbar button ${b.id} is in the catalog`);
+  for (const entry of catalog.ACTION_CATALOG) assert.match(catalog.iconSvg(entry.icon), /^<svg/, `${entry.id} uses a trusted toolbar SVG`);
+  const s = registryModule.createFeature({ dependencies: { handleAction() {}, toastInfo() {} } });
+  assert.deepEqual(s.listShortcutActions().map(a => a.id), ids, 'every catalog entry is automatically available to radial settings');
+  assert.throws(() => s.registerShortcutAction({ type: 'plugin', id: 'prev', execute() {} }), /Duplicate/);
+  assert.equal(catalog.actionIconSvg({ type: 'plugin', id: 'quickEdit' }), constants.ICONS.pencil);
+  assert.equal(catalog.actionIconSvg({ type: 'plugin', id: 'recent1' }), constants.ICONS.num(1));
+  assert.equal(catalog.actionIconSvg({ type: 'plugin', id: '<img onerror=x>' }), '');
+  const toolbarSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'toolbar.js'), 'utf8');
+  assert.match(toolbarSource, /actionIconSvg\('quickEdit'\)/);
+  const settingsUi = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings-ui.js'), 'utf8');
+  assert.ok(!/console-mode|简单模式|高级模式/.test(settingsUi), 'simple/advanced mode switch removed');
+  assert.equal(catalog.actionTypeLabel({ label: 'x' }), '空动作');
+  assert.equal(catalog.actionTypeLabel({ action: { type: 'plugin', id: 'prev' } }), '插件动作');
+});
+test('v4 default wheel has 8 cells, four named actions and four unnamed empty cells', () => {
+  const d = configModule.defaultRadialConfig();
+  assert.equal(d.version, 4); assert.equal(d.menus.length, 1);
+  const items = d.menus[0].items; assert.equal(items.length, 8);
+  assert.deepEqual(items.map(i => i.action?.id || null), ['prev', null, 'recent1', null, 'next', null, 'quickEdit', null]);
+  assert.deepEqual(items.map(i => i.showLabel), [true, false, true, false, true, false, true, false]);
+  assert.deepEqual(configModule.normalizeRadialConfig(d).menus[0].items, items);
+  const n = configModule.normalizeRadialConfig({ menus: [{ id: 'main', items: [{ label: 'A', action: { type: 'plugin', id: 'prev' } }, { label: 'B' }, { label: 'C', showLabel: false, action: { type: 'plugin', id: 'next' } }, { label: 'D', showLabel: true }] }] });
+  assert.deepEqual(n.menus[0].items.map(i => i.showLabel), [true, false, false, true]);
+});
+test('per-cell label toggle renders independently with toolbar SVG icons', () => {
+  runtime();
+  const menu = configModule.defaultRadialConfig().menus[0];
+  const view = viewModule.createFeature().createRadialView({ menu, appearance: configModule.defaultRadialAppearance(), radius: 120 });
+  const labels = view.buttons.map(b => b.all().some(n => n.classes?.has('stcj-sector-label')));
+  assert.deepEqual(labels, [true, false, true, false, true, false, true, false]);
+  const icons = view.buttons.map(b => b.all().find(n => n.classes?.has('stcj-sector-icon'))?.innerHTML || '');
+  assert.match(icons[6], /^<svg/); assert.equal(icons[1], '', 'empty cell has no icon');
+  assert.equal(view.buttons[1].title, '未设置');
+});
+test('inspector title follows action type on the same row as the direction badge, and label toggle is undoable', () => {
+  const f = editorReviewFixture({ menus: configModule.defaultRadialConfig().menus });
+  f.cell('main', 1).click();
+  const heading = () => f.actions.all().find(n => n.tagName === 'H3' && /^第 /.test(n.textContent));
+  const head = f.actions.all().find(n => n.classes?.has('stcj-inspector-head'));
+  assert.equal(heading().textContent, '第 2 格 · 空动作');
+  assert.ok(head.all().some(n => n.textContent === '↗ 右上 (NE)'), 'direction badge shares the title row');
+  const type = f.actions.querySelector('[aria-label="动作类型"]'); type.value = 'plugin'; type.emit('change');
+  assert.equal(heading().textContent, '第 2 格 · 插件动作');
+  assert.equal(f.saved().menus[0].items[1].action.id, 'prev'); assert.equal(f.saved().menus[0].items[1].showLabel, true);
+  const toggle = f.actions.querySelector('[aria-label="在轮盘上显示名称"]'); toggle.checked = false; toggle.emit('change');
+  assert.equal(f.saved().menus[0].items[1].showLabel, false);
+  f.actions.all().find(n => n.textContent === '↶ 撤销').click(); assert.equal(f.saved().menus[0].items[1].showLabel, true);
+  f.feature.destroyRadialSettings(); f.r.services.destroyRadial();
 });
