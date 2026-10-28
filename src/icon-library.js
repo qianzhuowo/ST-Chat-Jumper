@@ -52,30 +52,120 @@ const TOOLBAR_ICON_LABELS = Object.freeze({
 export const ICON_PATH_MAX = 4000;
 // Only SVG path commands, numbers, separators and exponents; no quotes, brackets or `url(`.
 const PATH_RE = /^[MmLlHhVvCcSsQqTtAaZz0-9eE.,+\-\s]+$/;
-export function sanitizeIconPath(value) {
+// Library-file icons live outside settings.json, so they may carry larger paths.
+export const USER_ICON_PATH_MAX = 20000;
+export const USER_ICON_ID_RE = /^user:[a-z0-9_-]{1,40}$/;
+export function sanitizeIconPath(value, max = ICON_PATH_MAX) {
   if (typeof value !== 'string') return '';
   const d = value.trim().replace(/\s+/g, ' ');
-  return d && d.length <= ICON_PATH_MAX && PATH_RE.test(d) && /^[Mm]/.test(d) ? d : '';
+  return d && d.length <= max && PATH_RE.test(d) && /^[Mm]/.test(d) ? d : '';
 }
+export function sanitizeViewBox(value) {
+  const parts = String(value ?? '').trim().split(/[\s,]+/).map(Number);
+  if (parts.length !== 4 || !parts.every(Number.isFinite) || parts[2] <= 0 || parts[3] <= 0) return '0 0 24 24';
+  return parts.map(n => +n.toFixed(3)).join(' ');
+}
+// Shape of one entry in the user icon file (user/files/stcj-icon-library.json).
+export function normalizeUserIcon(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !/^[a-z0-9_-]{1,40}$/.test(raw.id)) return null;
+  const d = sanitizeIconPath(raw.d, USER_ICON_PATH_MAX); if (!d) return null;
+  const icon = { id: raw.id, name: String(raw.name || raw.id).slice(0, 40), d, viewBox: sanitizeViewBox(raw.viewBox), mode: raw.mode === 'stroke' ? 'stroke' : 'fill' };
+  if (icon.mode === 'stroke') icon.strokeWidth = Math.min(8, Math.max(.25, Number(raw.strokeWidth) || 2));
+  return icon;
+}
+const userIcons = new Map();
+export function setUserIcons(list) { userIcons.clear(); for (const raw of Array.isArray(list) ? list : []) { const icon = normalizeUserIcon(raw); if (icon && !userIcons.has(icon.id)) userIcons.set(icon.id, icon); } }
+export function getUserIcons() { return [...userIcons.values()]; }
+export function getUserIcon(id) { return userIcons.get(String(id || '').replace(/^user:/, '')) || null; }
 export function listIconChoices() {
   const lib = Object.entries(ICON_PATHS).map(([id, [label]]) => ({ id: `lib:${id}`, label, group: '通用' }));
   const tb = Object.entries(TOOLBAR_ICON_LABELS).filter(([id]) => typeof ICONS[id] === 'string').map(([id, label]) => ({ id: `tb:${id}`, label, group: '插件' }));
-  return [...tb, ...lib];
+  return [...getUserIcons().map(i => ({ id: `user:${i.id}`, label: i.name, group: '我的图标' })), ...tb, ...lib];
+}
+export function iconLabel(id) {
+  return listIconChoices().find(c => c.id === id)?.label || (USER_ICON_ID_RE.test(String(id)) ? '已删除的自定义图标' : '');
 }
 export function isIconId(id) {
   if (typeof id !== 'string') return false;
+  // User references are kept even before the icon file loads, so they are never silently dropped.
+  if (USER_ICON_ID_RE.test(id)) return true;
   const [kind, name] = id.split(':');
   if (kind === 'lib') return Object.prototype.hasOwnProperty.call(ICON_PATHS, name);
   if (kind === 'tb') return Object.prototype.hasOwnProperty.call(TOOLBAR_ICON_LABELS, name) && typeof ICONS[name] === 'string';
   return false;
 }
-// Resolves a cell icon to either trusted toolbar markup or a validated path string.
+// Resolves a cell icon to trusted toolbar markup or validated path data (never raw markup from data).
 export function resolveIconSource(item) {
   const path = sanitizeIconPath(item?.iconPath);
   if (path) return { path };
   if (isIconId(item?.iconId)) {
+    if (item.iconId.startsWith('user:')) {
+      const icon = getUserIcon(item.iconId);
+      return icon ? { path: icon.d, viewBox: icon.viewBox, mode: icon.mode, strokeWidth: icon.strokeWidth } : null;
+    }
     const [kind, name] = item.iconId.split(':');
     return kind === 'lib' ? { path: ICON_PATHS[name][1] } : { markup: ICONS[name] };
   }
   return null;
+}
+
+// ---- SVG file import: shapes are converted to path data; everything else is discarded. ----
+const num = v => { const n = Number.parseFloat(v); return Number.isFinite(n) ? n : 0; };
+const f = n => +n.toFixed(3);
+function shapeToPath(el) {
+  const a = name => el.getAttribute(name);
+  switch (el.localName) {
+    case 'path': return a('d') || '';
+    case 'rect': { const x = num(a('x')), y = num(a('y')), w = num(a('width')), h = num(a('height')); return w > 0 && h > 0 ? `M${f(x)} ${f(y)}H${f(x + w)}V${f(y + h)}H${f(x)}Z` : ''; }
+    case 'circle': case 'ellipse': {
+      const cx = num(a('cx')), cy = num(a('cy')), rx = el.localName === 'circle' ? num(a('r')) : num(a('rx')), ry = el.localName === 'circle' ? rx : num(a('ry'));
+      return rx > 0 && ry > 0 ? `M${f(cx - rx)} ${f(cy)}A${f(rx)} ${f(ry)} 0 1 0 ${f(cx + rx)} ${f(cy)}A${f(rx)} ${f(ry)} 0 1 0 ${f(cx - rx)} ${f(cy)}Z` : '';
+    }
+    case 'line': return `M${f(num(a('x1')))} ${f(num(a('y1')))}L${f(num(a('x2')))} ${f(num(a('y2')))}`;
+    case 'polyline': case 'polygon': {
+      const pts = String(a('points') || '').trim().split(/[\s,]+/).map(Number);
+      if (pts.length < 4 || pts.some(n => !Number.isFinite(n))) return '';
+      let d = `M${f(pts[0])} ${f(pts[1])}`; for (let i = 2; i + 1 < pts.length; i += 2) d += `L${f(pts[i])} ${f(pts[i + 1])}`;
+      return el.localName === 'polygon' ? d + 'Z' : d;
+    }
+    default: return '';
+  }
+}
+const SHAPES = 'path,rect,circle,ellipse,line,polyline,polygon';
+// Parses SVG text with an injected DOMParser (browser) into a library icon draft.
+export function svgTextToIcon(text, parser, name = '自定义图标') {
+  if (typeof text !== 'string' || !text.trim()) throw new Error('文件为空');
+  if (text.length > 300000) throw new Error('SVG 超过 300KB');
+  const trimmed = text.trim();
+  // Plain path data is accepted as-is (StarPie / Material style).
+  if (!trimmed.startsWith('<')) {
+    const d = sanitizeIconPath(trimmed, USER_ICON_PATH_MAX);
+    if (!d) throw new Error('路径无效：只接受以 M 开头的路径命令与数字');
+    return { icon: { name, d, viewBox: '0 0 24 24', mode: 'fill' }, warnings: [] };
+  }
+  const doc = parser.parseFromString(trimmed, 'image/svg+xml');
+  const root = doc.documentElement;
+  if (!root || root.localName !== 'svg' || doc.getElementsByTagName('parsererror').length) throw new Error('不是有效的 SVG 文件');
+  const warnings = [];
+  let viewBox = root.getAttribute('viewBox');
+  if (!viewBox) { const w = num(root.getAttribute('width')), h = num(root.getAttribute('height')); viewBox = w > 0 && h > 0 ? `0 0 ${w} ${h}` : '0 0 24 24'; }
+  const parts = []; let skipped = 0, strokeHint = null;
+  for (const el of root.querySelectorAll(SHAPES)) {
+    if (el.closest('defs,clipPath,mask,symbol,pattern,marker')) continue;
+    if (el.getAttribute('transform') || el.closest('[transform]') !== null && el.closest('[transform]') !== el) { skipped++; continue; }
+    const d = shapeToPath(el); if (!d) continue;
+    parts.push(d);
+    if (strokeHint === null) {
+      const fill = el.getAttribute('fill') ?? el.closest('[fill]')?.getAttribute('fill');
+      const stroke = el.getAttribute('stroke') ?? el.closest('[stroke]')?.getAttribute('stroke');
+      const width = el.getAttribute('stroke-width') ?? el.closest('[stroke-width]')?.getAttribute('stroke-width');
+      strokeHint = fill === 'none' && stroke && stroke !== 'none' ? { strokeWidth: num(width) || 2 } : false;
+    }
+  }
+  if (skipped) warnings.push(`已忽略 ${skipped} 个带 transform 的图形`);
+  const d = sanitizeIconPath(parts.join(' '), USER_ICON_PATH_MAX);
+  if (!d) throw new Error(parts.length ? '路径过长或含不支持的字符' : '没有找到可用的矢量图形');
+  const icon = { name, d, viewBox: sanitizeViewBox(viewBox), mode: strokeHint ? 'stroke' : 'fill' };
+  if (strokeHint) icon.strokeWidth = Math.min(8, Math.max(.25, strokeHint.strokeWidth));
+  return { icon, warnings };
 }

@@ -1,6 +1,6 @@
 import { resolveSubringBounds, resolveWheelAppearance, arcHitIndex } from './radial-view.js';
 import { normalizeRadialAppearance } from './radial-config.js';
-export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView'];
+export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView', 'loadIconLibrary', 'iconLibraryStatus'];
 
 export function radialHitTest(x, y, center, count, deadZone, cancelDistance, rotation = 0) {
   const dx = x - center.x, dy = y - center.y;
@@ -177,6 +177,8 @@ export function createFeature({ dependencies }) {
     };
     overlay.addEventListener('click', e => { if (e.target === overlay) cancelRadial(); });
     document.body.append(overlay); render(); overlay.focus({ preventScroll: true });
+    // Custom icons come from the separate user icon file; re-render once it arrives.
+    if (dependencies.loadIconLibrary && !dependencies.iconLibraryStatus?.().loaded) { const opened = active; void dependencies.loadIconLibrary().then(() => { if (active === opened) render(); }); }
     return true;
   }
   function selectAt(x, y) {

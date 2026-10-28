@@ -32,6 +32,8 @@ export function normalizeRadialAppearance(raw) {
   result.shape = ['ring', 'petals', 'solid'].includes(r.shape) ? r.shape : result.shape;
   for (const [key, min, max] of [['gap', 0, 16], ['innerRatio', 25, 65], ['rotation', -180, 180], ['fontSize', 10, 20], ['scale', 70, 130], ['opacity', 45, 100], ['glow', 0, 30], ['corner', 0, 16]]) result[key] = number(r[key], result[key], min, max);
   if (typeof r.centerSymbol === 'string') result.centerSymbol = [...r.centerSymbol].slice(0, 3).join('') || '×';
+  // Centre icon is edited from the actions page together with the sector icons.
+  if (isIconId(r.centerIconId)) result.centerIconId = r.centerIconId;
   return result;
 }
 const slot = (id, label) => ({ label, showLabel: true, showIcon: true, action: { type: 'plugin', id } });

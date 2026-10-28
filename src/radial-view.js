@@ -85,9 +85,12 @@ export function createSectorIcon(item) {
   icon.className = 'stcj-sector-icon';
   if (source?.path) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('fill', 'currentColor');
+    svg.setAttribute('viewBox', source.viewBox || '0 0 24 24');
     svg.setAttribute('aria-hidden', 'true');
+    if (source.mode === 'stroke') {
+      svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', String(source.strokeWidth || 2)); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+    } else svg.setAttribute('fill', 'currentColor');
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', source.path);
     svg.append(path); icon.append(svg);
@@ -259,7 +262,10 @@ export function createFeature() {
     center.setAttribute('aria-label', isSubFocus ? '返回主轮盘' : '取消轮盘');
     const symbol = document.createElement('span');
     symbol.className = 'stcj-center-symbol';
-    symbol.textContent = isSubFocus ? '↶' : a.centerSymbol;
+    // The main wheel's centre may carry an icon chosen in 「扇区与动作」; the text symbol is the fallback.
+    const centerIcon = !isSubFocus && a.centerIconId ? createSectorIcon({ iconId: a.centerIconId }) : null;
+    if (centerIcon) { centerIcon.className = 'stcj-center-icon'; symbol.append(centerIcon); }
+    else symbol.textContent = isSubFocus ? '↶' : a.centerSymbol;
     const caption = document.createElement('small');
     caption.textContent = isSubFocus ? '返回' : '取消';
     center.append(symbol, caption);

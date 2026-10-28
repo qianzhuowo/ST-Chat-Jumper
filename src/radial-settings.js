@@ -1,11 +1,13 @@
 import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, resizePrimary, swapSlots, affectedByShrink } from './radial-editor.js';
 import { bindCanvasSwap } from './radial-canvas-edit.js';
-import { resolveWheelAppearance } from './radial-view.js';
+import { resolveWheelAppearance, createSectorIcon } from './radial-view.js';
 import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
 import { ACTION_TYPES, actionTypeOf, actionTypeLabel } from './action-catalog.js';
-import { ICON_PATH_MAX, listIconChoices, sanitizeIconPath } from './icon-library.js';
+import { getUserIcons, iconLabel, normalizeUserIcon } from './icon-library.js';
+import { iconUsage, migrateInlinePaths, newIconId } from './icon-store.js';
+import { openIconPicker } from './icon-picker.js';
 
-export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode'];
+export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode', 'loadIconLibrary', 'saveIconLibrary', 'onIconLibraryChange', 'iconLibraryStatus'];
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
@@ -26,7 +28,7 @@ export function createFeature({ dependencies }) {
     const dialog = container.closest('dialog');
     let menuId = 'main', slotIndex = -1, subMenuId = null, subSlotIndex = -1;
     let pendingCount = null;
-    let previewZoom = 100, clipboardSlot = null;
+    let previewZoom = 100, clipboardSlot = null, centerSelected = false;
     const undo = new Map(), historyStack = [], redoStack = [], previews = [];
     container.classList.add('stcj-radial-settings');
     const status = dialog?.querySelector('#stcj-settings-save-state') || element('p', 'stcj-editor-status', '自动保存 · 预览不会执行动作');
@@ -127,7 +129,36 @@ export function createFeature({ dependencies }) {
       }
       renderEditor(); renderAppearance(); renderPreviews();
     }
+    // Shared icon row: preview + name + StarPie-style picker window.
+    function iconRow(parent, item, followLabel, onPick) {
+      const row = element('div', 'stcj-setting-row stcj-icon-row');
+      const copyBox = element('span', 'stcj-setting-copy'); copyBox.append(element('span', '', '图标')); row.append(copyBox);
+      const control = element('span', 'stcj-setting-control');
+      const a = appearance(mainMenu());
+      const current = item.iconPath ? '内嵌路径（待迁移）' : item.iconId ? (iconLabel(item.iconId) || item.iconId) : followLabel;
+      // One compact entry: the button itself shows the current icon.
+      const open = button(control, '', () => openIconPicker({
+        host: dialog || container, current: item.iconId || '', appearance: a, followLabel,
+        iconUsage: id => iconUsage(config, id), saveIcons: list => dependencies.saveIconLibrary(list),
+        onApply: id => { if (id !== (item.iconId || '') || item.iconPath) onPick(id); },
+        onIconDeleted: id => clearIconRefs(id),
+      }), 'stcj-mini-btn stcj-icon-pick-btn');
+      const preview = element('span', 'stcj-icon-tile-preview is-small'); preview.style.background = a.surface; preview.style.color = a.text; preview.style.borderColor = a.border;
+      const icon = item.iconId || item.iconPath ? createSectorIcon({ iconId: item.iconId, iconPath: item.iconPath }) : null; if (icon) preview.append(icon);
+      open.append(preview, element('span', '', '选择图标'));
+      open.title = `当前：${current}`; open.setAttribute('aria-label', `选择图标，当前：${current}`); open.setAttribute('aria-haspopup', 'dialog');
+      row.append(control); parent.append(row); return open;
+    }
+    function clearIconRefs(id) {
+      if (!iconUsage(config, id)) { renderEditor(); renderPreviews(); return; }
+      change('删除自定义图标', () => {
+        const each = menus => { for (const m of menus || []) for (const i of m.items || []) if (i.iconId === id) delete i.iconId; };
+        each(config.menus); for (const s of config.schemes || []) each(s.menus);
+        if (config.appearance.centerIconId === id) delete config.appearance.centerIconId;
+      });
+    }
     function stepSlot(delta) {
+      centerSelected = false;
       slotIndex = ((slotIndex < 0 ? 0 : slotIndex) + delta + mainMenu().items.length) % mainMenu().items.length;
       subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews();
     }
@@ -188,11 +219,14 @@ export function createFeature({ dependencies }) {
           selected: slotIndex, submenu: sub?.items.length ? sub : null,
           subAppearance: sub ? resolveWheelAppearance(config, sub, radius) : null,
           subSelected: subSlotIndex, parentIndex: slotIndex, activeTier: subSlotIndex >= 0 ? 'sub' : 'main', preview: true,
-          onChoose: i => { slotIndex = i; subSlotIndex = -1; menuId = 'main'; subMenuId = main.items[i]?.submenu || null; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
-          onSubChoose: i => { subSlotIndex = i; menuId = sub.id; subMenuId = sub.id; renderEditor(); renderAppearance(); renderPreviews(); },
-          onCenter: () => { slotIndex = -1; subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews(); },
+          onChoose: i => { centerSelected = false; slotIndex = i; subSlotIndex = -1; menuId = 'main'; subMenuId = main.items[i]?.submenu || null; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
+          onSubChoose: i => { centerSelected = false; subSlotIndex = i; menuId = sub.id; subMenuId = sub.id; renderEditor(); renderAppearance(); renderPreviews(); },
+          // Clicking the centre selects it so its icon is edited here like any sector.
+          onCenter: () => { centerSelected = true; slotIndex = -1; subSlotIndex = -1; menuId = 'main'; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
         });
         p.canvas.replaceChildren(view.element);
+        const centerNode = view.element.querySelector('.stcj-radial-center');
+        if (centerNode) { centerNode.classList.toggle('is-selected', centerSelected); centerNode.title = '点击编辑中心核图标'; }
         for (const [tier, buttons] of [['main', view.buttons], ['sub', view.subButtons]]) (buttons || []).forEach((b, i) => {
           b.dataset.editTier = tier; b.dataset.editIndex = String(i);
           b.setAttribute('aria-keyshortcuts', 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown');
@@ -308,7 +342,6 @@ export function createFeature({ dependencies }) {
         if (menu.id !== 'main' && ['rotation', 'scale', 'innerRatio'].includes(key)) continue;
         styleField(geometry, title, key, { type: 'range', min, max, live: true, proOnly });
       }
-      const centerInput = styleField(geometry, '中心核符号', 'centerSymbol', { type: 'text', hint: '仅文本符号，不加载图片或外部字体。', proOnly: true }); centerInput.maxLength = 6;
       button(geometry, '重置当前外观', () => { if (!beginAppearanceEdit('重置当前外观')) return; if (menu.id === 'main') { config.appearance = defaultRadialAppearance(); menu.appearance = null; } else menu.appearance = defaultRadialAppearance(); save(); renderAppearance(); renderEditor(); });
     }
 
@@ -317,6 +350,16 @@ export function createFeature({ dependencies }) {
     preview(actionLayout);
     const editor = element('div', 'stcj-config-controls'); actionLayout.append(editor);
     const actions = dependencies.listShortcutActions();
+    function renderCenterInspector() {
+      const box = card(editor); box.dataset.centerInspector = 'true';
+      const head = element('div', 'stcj-inspector-head'); box.append(head);
+      head.append(element('h3', '', '中心核'), element('span', 'stcj-direction-badge', '轮盘中心'));
+      box.append(element('p', 'stcj-settings-note', '运行时点击中心核取消轮盘（二级展开时返回主轮盘）。设置了图标时显示图标，否则显示备用文字符号。'));
+      iconRow(box, { iconId: config.appearance.centerIconId }, '使用文字符号', iconId => change(iconId ? '修改中心核图标' : '中心核改用文字符号', () => { if (iconId) config.appearance.centerIconId = iconId; else delete config.appearance.centerIconId; }));
+      const symbolInput = field(box, '备用文字符号', { value: config.appearance.centerSymbol, aria: '中心核备用文字符号', hint: '最多 3 个字符；仅文本，不加载图片或外部字体。', onChange: v => change('修改中心核符号', () => { config.appearance.centerSymbol = [...String(v || '')].slice(0, 3).join('') || '×'; }) });
+      symbolInput.maxLength = 6;
+      button(box, '取消选择', () => { centerSelected = false; renderEditor(); renderPreviews(); });
+    }
     function renderEditor() {
       editor.replaceChildren();
       if (slotIndex >= mainMenu().items.length) slotIndex = -1;
@@ -342,6 +385,7 @@ export function createFeature({ dependencies }) {
         button(warning, '确认缩减', () => change('缩减一级方位数量', () => { resizePrimary(config, pendingCount); slotIndex = -1; subSlotIndex = -1; menuId = 'main'; }));
         button(warning, '取消缩减', () => { pendingCount = null; renderEditor(); });
       }
+      if (centerSelected) { renderCenterInspector(); return; }
       const parent = mainMenu().items[slotIndex];
       if (!parent) { card(editor, '选择一级格子', '点击画布中的一级动作，才能添加或编辑属于它的二级动作。'); return; }
       const isSub = subSlotIndex >= 0, menu = isSub ? sub : mainMenu(), index = isSub ? subSlotIndex : slotIndex, item = menu.items[index];
@@ -355,19 +399,7 @@ export function createFeature({ dependencies }) {
       field(inspector, '动作名称', { value: item.label, aria: '动作名称', onChange: v => mutateSelected('修改动作名称', selected => { selected.label = v || '未设置'; }) });
       field(inspector, '在轮盘上显示名称', { type: 'checkbox', value: !!item.showLabel, aria: '在轮盘上显示名称', onChange: v => mutateSelected(v ? '显示动作名称' : '隐藏动作名称', selected => { selected.showLabel = v; }) });
       field(inspector, '在轮盘上显示图标', { type: 'checkbox', value: item.showIcon !== false, aria: '在轮盘上显示图标', onChange: v => mutateSelected(v ? '显示动作图标' : '隐藏动作图标', selected => { selected.showIcon = v; }) });
-      const iconChoices = [['', '跟随动作（默认）'], ...listIconChoices().map(c => [c.id, `${c.group} · ${c.label}`])];
-      if (item.iconPath) iconChoices.unshift(['custom', '自定义矢量路径']);
-      field(inspector, '图标', { value: item.iconPath ? 'custom' : (item.iconId || ''), choices: iconChoices, aria: '动作图标', onChange: v => mutateSelected('修改动作图标', selected => {
-        if (v === 'custom') return;
-        delete selected.iconPath; if (v) selected.iconId = v; else delete selected.iconId;
-      }) });
-      const pathInput = field(inspector, '自定义 SVG 路径', { value: item.iconPath || '', aria: '自定义 SVG 路径', hint: '粘贴 24×24 的 path d 数据（如 StarPie / Material 图标）；留空恢复上方选择。只接受路径命令与数字。', onChange: v => {
-        const raw = String(v || '').trim();
-        const clean = sanitizeIconPath(raw);
-        if (raw && !clean) { status.textContent = '路径无效：只接受以 M 开头的 SVG 路径命令与数字；未修改配置'; return; }
-        mutateSelected(clean ? '设置自定义图标' : '清除自定义图标', selected => { if (clean) selected.iconPath = clean; else delete selected.iconPath; });
-      } });
-      pathInput.maxLength = ICON_PATH_MAX; pathInput.spellcheck = false;
+      iconRow(inspector, item, '跟随动作（默认）', iconId => mutateSelected(iconId ? '修改动作图标' : '恢复默认图标', selected => { delete selected.iconPath; if (iconId) selected.iconId = iconId; else delete selected.iconId; }));
       {
         const type = item.submenu && !item.action ? 'empty' : actionTypeOf(item);
         const typeChoices = Object.entries(ACTION_TYPES).map(([id, t]) => [id, t.label]);
@@ -428,22 +460,52 @@ export function createFeature({ dependencies }) {
     const backup = card(schemePage, '配置 JSON', '仅包含本插件轮盘配置，不包含聊天、API 或宿主设置。文本不会作为代码运行。');
     const json = element('textarea', 'stcj-config-json'); json.rows = 8; json.setAttribute('aria-label', '轮盘配置 JSON'); json.spellcheck = false; backup.append(json);
     const backupTools = element('div', 'stcj-editor-tools'); backup.append(backupTools);
-    button(backupTools, '生成可复制 JSON', () => { json.value = JSON.stringify(normalizeRadialConfig(config), null, 2); json.focus(); json.select(); });
+    button(backupTools, '生成可复制 JSON', () => {
+      const out = normalizeRadialConfig(config);
+      // Bundle only the custom icons this configuration references, so backups stay self-contained.
+      const used = new Set(); const each = menus => { for (const m of menus || []) for (const i of m.items || []) if (i.iconId?.startsWith('user:')) used.add(i.iconId); };
+      each(out.menus); out.schemes.forEach(s => each(s.menus)); if (out.appearance.centerIconId?.startsWith('user:')) used.add(out.appearance.centerIconId);
+      const bundled = getUserIcons().filter(i => used.has(`user:${i.id}`));
+      if (bundled.length) out.customIcons = bundled;
+      json.value = JSON.stringify(out, null, 2); json.focus(); json.select();
+    });
     let includeTriggers = false; field(backup, '导入时包含触发设置', { type: 'checkbox', value: false, hint: '默认保留现有启用状态、快捷键、鼠标和触屏设置。', onChange: v => { includeTriggers = v; } });
     button(backupTools, '导入 JSON', () => {
       try {
         if (json.value.length > 1000000) throw new Error('配置超过100万字符上限');
         const raw = JSON.parse(json.value);
         if (!raw || !Array.isArray(raw.menus) || raw.version !== RADIAL_CONFIG_VERSION) throw new Error('仅支持 v4 轮盘配置；旧版本配置已停用');
+        const iconNote = mergeImportedIcons(raw);
         const next = normalizeRadialConfig(raw);
         for (const key of includeTriggers ? Object.keys(next) : ['menus', 'appearance', 'radius', 'schemes', 'panelTheme']) config[key] = next[key];
         config.cancelDistance = Math.max(config.cancelDistance, config.radius + 40); undo.clear(); menuId = 'main';
         subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; slotIndex = 0; subSlotIndex = 0;
         triggerFields.forEach(([input, key]) => { if (input.type === 'checkbox') input.checked = config[key]; else input.value = config[key]; });
-        syncPanelThemeUI(); save('配置已校验并导入'); renderEditor(); renderAppearance(); renderSchemes();
+        syncPanelThemeUI(); save(`配置已校验并导入${iconNote}`); renderEditor(); renderAppearance(); renderSchemes();
       } catch (error) { status.textContent = `未导入：${error.message}`; }
     });
-    const about = page('about', '关于与设计致谢', '独立浏览器实现 · 无构建依赖 · 与 SillyTavern / TauriTavern 共用服务架构。');
+    // Merges bundled icons into the icon file; id clashes with different shapes are remapped in `raw`.
+    // Import itself stays synchronous; only the icon file write completes in the background.
+    function mergeImportedIcons(raw) {
+      const incoming = (Array.isArray(raw.customIcons) ? raw.customIcons : []).map(normalizeUserIcon).filter(Boolean);
+      if (!incoming.length) return '';
+      const list = getUserIcons().slice(), remap = new Map(); let added = 0;
+      for (const icon of incoming) {
+        const same = list.find(i => i.d === icon.d && i.viewBox === icon.viewBox && i.mode === icon.mode);
+        if (same) { if (same.id !== icon.id) remap.set(`user:${icon.id}`, `user:${same.id}`); continue; }
+        const id = list.some(i => i.id === icon.id) ? newIconId(list) : icon.id;
+        if (id !== icon.id) remap.set(`user:${icon.id}`, `user:${id}`);
+        list.push({ ...icon, id }); added++;
+      }
+      const fix = item => { if (item && remap.has(item.iconId)) item.iconId = remap.get(item.iconId); };
+      for (const m of raw.menus || []) (m.items || []).forEach(fix);
+      for (const s of raw.schemes || []) for (const m of s.menus || []) (m.items || []).forEach(fix);
+      if (raw.appearance && remap.has(raw.appearance.centerIconId)) raw.appearance.centerIconId = remap.get(raw.appearance.centerIconId);
+      if (!added) return '';
+      dependencies.saveIconLibrary(list).then(() => { status.textContent = `配置已导入；已合并 ${added} 个自定义图标`; },
+        error => { status.textContent = `配置已导入；自定义图标未保存（${error.message || error}），对应格子暂用默认图标`; });
+      return `；正在保存 ${added} 个自定义图标`;
+    }    const about = page('about', '关于与设计致谢', '独立浏览器实现 · 无构建依赖 · 与 SillyTavern / TauriTavern 共用服务架构。');
     const credits = card(about, '设计参考与许可边界', '设置分区、交互画布和环形扇区设计参考 StarPie；入口信息卡的呈现参考 st-toolbox（Qianzhuo）。代码、几何渲染、样式和符号由本插件独立编写。');
     credits.append(element('p', '', 'StarPie © 2026 StarPie Contributors，维护者 SoftBlack42。参考版本 LICENSE 实为 “MIT License (with Non-Commercial Restriction)”，不是标准 MIT。本插件未复制或分发其代码、图片、声音、字体或商标图形，不将其许可表述为本插件许可。'));
     credits.append(element('p', '', 'st-toolbox 的参考副本使用 GPLv3；本插件保留原有 GPLv3 LICENSE。图标仅为系统字体呈现的文本符号与原创几何图形，没有新增第三方资源包。'));
@@ -455,7 +517,24 @@ export function createFeature({ dependencies }) {
     renderEditor(); renderAppearance(); renderSchemes(); renderPreviews();
     const observer = window.ResizeObserver ? new ResizeObserver(renderPreviews) : null;
     previews.forEach(p => observer?.observe(p.canvas));
-    detachObserver = () => { observer?.disconnect(); previews.forEach(p => p.dispose?.()); };
+    // Custom icons live in user/files/stcj-icon-library.json; load it, then move legacy inline paths there once.
+    let mounted = true;
+    const offIcons = dependencies.onIconLibraryChange?.(() => { if (mounted) { renderPreviews(); renderEditor(); } });
+    void (dependencies.loadIconLibrary?.() || Promise.resolve()).then(async () => {
+      if (!mounted) return;
+      const state = dependencies.iconLibraryStatus?.() || { error: '' };
+      if (state.error) { status.textContent = `自定义图标文件不可用：${state.error}；格子暂用默认图标`; return; }
+      const draft = { menus: copy(config.menus), schemes: copy(config.schemes) };
+      const { icons, moved } = migrateInlinePaths(draft, getUserIcons());
+      if (!moved) return;
+      try {
+        await dependencies.saveIconLibrary(icons);
+        if (!mounted) return;
+        config.menus = draft.menus; config.schemes = draft.schemes;
+        save(`已把 ${moved} 个内嵌图标迁移到独立图标文件`); renderEditor();
+      } catch (error) { status.textContent = `内嵌图标暂未迁移：${error.message || error}；原图标照常显示`; }
+    });
+    detachObserver = () => { mounted = false; offIcons?.(); observer?.disconnect(); previews.forEach(p => p.dispose?.()); };
   }
   return { mountRadialSettings, destroyRadialSettings };
 }
