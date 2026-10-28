@@ -25,6 +25,8 @@ export const ACTION_CATALOG = Object.freeze([
   { id: 'togglePin', label: '点选收藏', icon: 'pin' },
   { id: 'toggleFavPanel', label: '最近收藏', icon: 'note', run: 'openFavoritesManager' },
   { id: 'openFavoritesManager', label: '收藏管理', icon: 'folder' },
+  // Radial-only: calls the same service as the settings「一键隐藏悬浮条」button.
+  { id: 'toggleToolbar', label: '隐藏/显示悬浮条', icon: 'eyeOff', service: 'toggleGlobalHide' },
 ]);
 
 // Action kinds a radial cell can hold. Future kinds (host commands, character
@@ -34,14 +36,14 @@ export const ACTION_TYPES = Object.freeze({
   plugin: { label: '插件动作' },
 });
 export function actionTypeOf(item) {
-  if (item?.submenu) return 'submenu';
-  if (!item?.action) return 'empty';
-  return item.action.type || 'plugin';
+  if (item?.action) return item.action.type || 'plugin';
+  return item?.submenu ? 'submenu' : 'empty';
 }
 export function actionTypeLabel(item) {
-  if (item?.submenu) return '二级动作组';
   const type = actionTypeOf(item);
-  return ACTION_TYPES[type]?.label || `${type} 动作`;
+  if (type === 'submenu') return '二级动作组';
+  const label = ACTION_TYPES[type]?.label || `${type} 动作`;
+  return item?.submenu ? `${label} · 含二级` : label;
 }
 
 const byId = new Map(ACTION_CATALOG.map(entry => [entry.id, entry]));

@@ -221,7 +221,7 @@ test('appearance validates colors and inherited palette names, and leaves label 
     for (const key of ['surface', 'highlight', 'accent', 'border', 'text', 'center']) assert.match(a[key], /^#[0-9a-f]{6}$/i);
   }
   const a = configModule.normalizeRadialAppearance({ theme: 'porcelain', surface: 'url(javascript:bad)', accent: '#123456', gap: 999, rotation: -999, showLabels: false, showIcons: false, centerSymbol: '123456' });
-  assert.equal(a.surface, '#f6f8fb'); assert.equal(a.accent, '#123456'); assert.equal(a.gap, 16); assert.equal(a.rotation, -180); assert.equal(a.showIcons, false); assert.equal('showLabels' in a, false); assert.equal(a.centerSymbol, '123');
+  assert.equal(a.surface, '#f6f8fb'); assert.equal(a.accent, '#123456'); assert.equal(a.gap, 16); assert.equal(a.rotation, -180); assert.equal('showIcons' in a, false); assert.equal('showLabels' in a, false); assert.equal(a.centerSymbol, '123');
 });
 test('imported main appearance becomes the single editable global appearance, while children remain independent', () => {
   const config = configModule.normalizeRadialConfig({ appearance: { theme: 'graphite' }, menus: [{ id: 'main', appearance: { theme: 'porcelain' }, items: [] }, { id: 'child', appearance: { theme: 'forest' }, items: [] }] });
@@ -590,4 +590,32 @@ test('inspector title follows action type on the same row as the direction badge
   assert.equal(f.saved().menus[0].items[1].showLabel, false);
   f.actions.all().find(n => n.textContent === '↶ 撤销').click(); assert.equal(f.saved().menus[0].items[1].showLabel, true);
   f.feature.destroyRadialSettings(); f.r.services.destroyRadial();
+});
+test('parent cells keep both an action and a child group; per-cell icon fields are validated', async () => {
+  const icons = await import('../src/icon-library.js');
+  const config = configModule.normalizeRadialConfig({ appearance: { showIcons: false, corner: 99, surface: '#AABBCC80' }, menus: [
+    { id: 'main', items: [{ label: 'P', submenu: 'kid', action: { type: 'plugin', id: 'prev' }, iconId: 'lib:star', iconPath: 'M0 0L24 24"/><script>' }, { label: 'Q', iconId: 'bogus:x', iconPath: 'M12,2L22,22H2Z', showIcon: true }] },
+    { id: 'kid', items: [{ label: 'c', action: { type: 'plugin', id: 'next' } }] }] });
+  const [p, q] = config.menus[0].items;
+  assert.equal(p.submenu, 'kid'); assert.deepEqual(p.action, { type: 'plugin', id: 'prev' });
+  assert.equal(p.iconId, 'lib:star'); assert.equal('iconPath' in p, false); assert.equal(p.showIcon, false);
+  assert.equal('iconId' in q, false); assert.equal(q.iconPath, 'M12,2L22,22H2Z'); assert.equal(q.showIcon, true);
+  assert.equal(config.appearance.corner, 16); assert.equal(config.appearance.surface, '#aabbcc80'); assert.equal('showIcons' in config.appearance, false);
+  assert.equal(configModule.normalizeRadialAppearance({}).corner, 6);
+  for (const bad of ['', 'L1 1', 'M1 1 url(x)', 'M1 1"', 'x'.repeat(5000)]) assert.equal(icons.sanitizeIconPath(bad), '');
+  assert.ok(icons.listIconChoices().every(c => icons.isIconId(c.id)));
+});
+test('rounded sector geometry stays closed and falls back to sharp corners at zero', () => {
+  const sharp = viewModule.sectorGeometry(0, 8, 120, 55, 3, 0, null, 0);
+  const round = viewModule.sectorGeometry(0, 8, 120, 55, 3, 0, null, 6);
+  assert.equal((sharp.path.match(/Q/g) || []).length, 0);
+  assert.equal((round.path.match(/Q/g) || []).length, 4); assert.match(round.path, /Z$/);
+  assert.equal(viewModule.sectorGeometry(0, 1, 120, 55, 0, 0, null, 6).path.includes('Q'), false);
+});
+test('toolbar visibility action is registered and calls the toggle service', async () => {
+  let hidden = 0, handled = 0;
+  const reg = registryModule.createFeature({ dependencies: { handleAction: () => { handled++; }, toastInfo() {}, toggleGlobalHide: () => { hidden++; } } });
+  const entry = reg.listShortcutActions().find(a => a.id === 'toggleToolbar');
+  assert.ok(entry); await reg.executeShortcutAction({ type: entry.type, id: entry.id });
+  assert.equal(hidden, 1); assert.equal(handled, 0);
 });

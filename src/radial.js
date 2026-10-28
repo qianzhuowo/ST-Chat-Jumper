@@ -95,7 +95,7 @@ export function createFeature({ dependencies }) {
     hint.className = 'stcj-radial-hint';
     const outerRadius = a.view.subringBounds ? a.view.subringBounds.subOuter : a.radius;
     const titleLabel = a.submenu ? `${a.menu.label} › ${a.submenu.label} (同屏二级)` : a.menu.label;
-    hint.textContent = titleLabel + ' · ' + (a.pointerId != null ? '外滑选子轮盘 / 内退解锁 / 中心取消' : '点击选择 / 方向键、Enter') + ' · Esc 取消';
+    hint.textContent = titleLabel + ' · ' + (a.pointerId != null ? '外滑选子轮盘 / 内退解锁 / 中心取消' : '点击选择 / 方向键、Enter（Shift+Enter 进入二级）') + ' · Esc 取消';
     hint.style.top = Math.min(innerHeight - 32, a.center.y + outerRadius + 8) + 'px';
     a.overlay.append(hint);
   }
@@ -124,10 +124,12 @@ export function createFeature({ dependencies }) {
     active.focusTier = 'main';
     render();
   }
-  function chooseMain(index) {
+  function chooseMain(index, enterChild = false) {
     if (!active) return;
     const item = active.menu.items[index];
-    if (item?.submenu) {
+    // A parent cell with its own action executes it; its child ring opens on hover/slide
+    // (or Shift+Enter). A parent without an action keeps opening its child ring.
+    if (item?.submenu && (!item.action || enterChild)) {
       active.pointerId = null;
       openSubmenu(item.submenu, index, true);
       render();
@@ -400,7 +402,7 @@ export function createFeature({ dependencies }) {
           if (active.focusTier === 'sub' && active.submenu) {
             if (active.subSelected >= 0) chooseSub(active.subSelected);
           } else {
-            chooseMain(active.selected);
+            chooseMain(active.selected, e.shiftKey);
           }
         }
         return;

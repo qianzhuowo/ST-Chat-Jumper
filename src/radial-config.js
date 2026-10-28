@@ -1,4 +1,5 @@
 import { EXT_SETTINGS_KEY } from './constants.js';
+import { isIconId, sanitizeIconPath } from './icon-library.js';
 
 export const requiredServices = [];
 export const RADIAL_CONFIG_VERSION = 4;
@@ -11,6 +12,8 @@ export function migrateRadialSettings(extensionSettings) {
 }
 const number = (value, fallback, min, max) => typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
 const bool = (value, fallback) => typeof value === 'boolean' ? value : fallback;
+// #rrggbb or #rrggbbaa (alpha channel for per-colour transparency).
+export const COLOR_RE = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
 export const RADIAL_THEMES = {
   graphite: { label: '石墨深色', surface: '#252d3b', highlight: '#345b86', text: '#eef4ff', border: '#546174', accent: '#80b8ff', center: '#18202d' },
   porcelain: { label: '瓷白', surface: '#f6f8fb', highlight: '#d9e8ff', text: '#25354c', border: '#c9d2dd', accent: '#356ee5', center: '#e7edf4' },
@@ -20,20 +23,19 @@ export const RADIAL_THEMES = {
 export function defaultRadialAppearance(theme = 'graphite') {
   const id = typeof theme === 'string' && Object.prototype.hasOwnProperty.call(RADIAL_THEMES, theme) ? theme : 'graphite';
   const palette = RADIAL_THEMES[id];
-  return { ...palette, theme: id, shape: 'ring', gap: 3, innerRatio: 46, rotation: 0, fontSize: 12, scale: 100, opacity: 96, glow: 14, showIcons: true, centerSymbol: '×' };
+  return { ...palette, theme: id, shape: 'ring', gap: 3, innerRatio: 46, rotation: 0, fontSize: 12, scale: 100, opacity: 96, glow: 14, corner: 6, centerSymbol: '×' };
 }
 export function normalizeRadialAppearance(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const result = defaultRadialAppearance(r.theme);
-  for (const key of ['surface', 'highlight', 'text', 'border', 'accent', 'center']) if (typeof r[key] === 'string' && /^#[0-9a-f]{6}$/i.test(r[key])) result[key] = r[key];
+  for (const key of ['surface', 'highlight', 'text', 'border', 'accent', 'center']) if (typeof r[key] === 'string' && COLOR_RE.test(r[key])) result[key] = r[key].toLowerCase();
   result.shape = ['ring', 'petals', 'solid'].includes(r.shape) ? r.shape : result.shape;
-  for (const [key, min, max] of [['gap', 0, 16], ['innerRatio', 25, 65], ['rotation', -180, 180], ['fontSize', 10, 20], ['scale', 70, 130], ['opacity', 45, 100], ['glow', 0, 30]]) result[key] = number(r[key], result[key], min, max);
-  result.showIcons = bool(r.showIcons, result.showIcons);
+  for (const [key, min, max] of [['gap', 0, 16], ['innerRatio', 25, 65], ['rotation', -180, 180], ['fontSize', 10, 20], ['scale', 70, 130], ['opacity', 45, 100], ['glow', 0, 30], ['corner', 0, 16]]) result[key] = number(r[key], result[key], min, max);
   if (typeof r.centerSymbol === 'string') result.centerSymbol = [...r.centerSymbol].slice(0, 3).join('') || '×';
   return result;
 }
-const slot = (id, label) => ({ label, showLabel: true, action: { type: 'plugin', id } });
-const empty = () => ({ label: '未设置', showLabel: false });
+const slot = (id, label) => ({ label, showLabel: true, showIcon: true, action: { type: 'plugin', id } });
+const empty = () => ({ label: '未设置', showLabel: false, showIcon: true });
 export function defaultRadialConfig() {
   return {
     version: RADIAL_CONFIG_VERSION, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
@@ -57,16 +59,22 @@ export function normalizeRadialConfig(raw) {
   result.cancelDistance = Math.max(result.radius + 40, result.cancelDistance);
   const menus = Array.isArray(r.menus) ? r.menus.slice(0, 17) : d.menus;
   const ids = new Set();
+  // Former global icon switch becomes the per-cell default once.
+  const legacyIconsOff = r.appearance?.showIcons === false;
   result.menus = menus.filter(m => m && typeof m.id === 'string' && /^[\w-]{1,40}$/.test(m.id) && !ids.has(m.id) && ids.add(m.id)).map(m => ({
     id: m.id, label: String(m.label || m.id).slice(0, 40), appearance: m.appearance ? normalizeRadialAppearance(m.appearance) : null,
     items: (Array.isArray(m.items) ? m.items : []).slice(0, 12).map(item => {
       const i = item && typeof item === 'object' ? item : {};
       const s = { label: String(i.label || '未设置').slice(0, 40) };
-      if (typeof i.color === 'string' && /^#[0-9a-f]{6}$/i.test(i.color)) s.color = i.color;
+      if (typeof i.color === 'string' && COLOR_RE.test(i.color)) s.color = i.color;
       if (typeof i.submenu === 'string') s.submenu = i.submenu.slice(0, 40);
-      else if (i.action && typeof i.action.type === 'string' && typeof i.action.id === 'string') s.action = { type: i.action.type.slice(0, 40), id: i.action.id.slice(0, 100) };
+      // A parent cell may hold its own action in addition to its child group.
+      if (i.action && typeof i.action.type === 'string' && typeof i.action.id === 'string') s.action = { type: i.action.type.slice(0, 40), id: i.action.id.slice(0, 100) };
       // Per-cell label visibility; when absent, cells with an action show their name.
       s.showLabel = typeof i.showLabel === 'boolean' ? i.showLabel : !!(s.action || s.submenu);
+      s.showIcon = typeof i.showIcon === 'boolean' ? i.showIcon : !legacyIconsOff;
+      if (isIconId(i.iconId)) s.iconId = i.iconId;
+      const iconPath = sanitizeIconPath(i.iconPath); if (iconPath) s.iconPath = iconPath;
       return s;
     }),
   }));

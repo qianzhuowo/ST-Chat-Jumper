@@ -3,6 +3,7 @@ import { bindCanvasSwap } from './radial-canvas-edit.js';
 import { resolveWheelAppearance } from './radial-view.js';
 import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
 import { ACTION_TYPES, actionTypeOf, actionTypeLabel } from './action-catalog.js';
+import { ICON_PATH_MAX, listIconChoices, sanitizeIconPath } from './icon-library.js';
 
 export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode'];
 
@@ -179,7 +180,9 @@ export function createFeature({ dependencies }) {
       for (const p of previews) {
         p.dispose?.(); p.zoomResetBtn.textContent = `${previewZoom}%`;
         const available = Math.min(p.canvas.clientWidth || 330, p.canvas.clientHeight || 315) - 24;
-        const radius = Math.max(40, Math.min(available / 3.1, config.radius * mainA.scale / 100 * previewZoom / 100));
+        const fit = Math.max(40, Math.min(available / 3.2, config.radius * mainA.scale / 100));
+        // Fit the full two-ring footprint (sub outer edge ≈ 1.55R) first, then apply preview zoom.
+        const radius = Math.max(32, fit * previewZoom / 100);
         const view = dependencies.createRadialView({
           menu: main, appearance: resolveWheelAppearance(config, main, radius), radius,
           selected: slotIndex, submenu: sub?.items.length ? sub : null,
@@ -269,8 +272,28 @@ export function createFeature({ dependencies }) {
         return field(parent, title, { ...options, disabled, value: a[key], onChange: (v, input) => {
           if (!target || !beginAppearanceEdit('修改轮盘外观')) return; target[key] = v; Object.assign(target, normalizeRadialAppearance(target));
           if (input.type !== 'checkbox') input.value = target[key]; save();
-          if (key === 'showIcons') { renderAppearance(); renderEditor(); }
         } });
+      }
+      // Native colour inputs only take #rrggbb, so alpha is a separate 0–100% slider (#rrggbbaa).
+      function colorField(parent, title, key) {
+        const value = a[key] || '#000000';
+        const alpha = value.length === 9 ? Math.round(parseInt(value.slice(7), 16) / 255 * 100) : 100;
+        const row = element('div', 'stcj-setting-row stcj-color-alpha-row stcj-pro-only');
+        const copyBox = element('span', 'stcj-setting-copy'); copyBox.append(element('span', '', title)); row.append(copyBox);
+        const control = element('span', 'stcj-setting-control');
+        const colorInput = element('input'); colorInput.type = 'color'; colorInput.value = value.slice(0, 7); colorInput.disabled = disabled; colorInput.setAttribute('aria-label', title);
+        const alphaInput = element('input'); alphaInput.type = 'range'; alphaInput.min = 0; alphaInput.max = 100; alphaInput.step = 1; alphaInput.value = alpha; alphaInput.disabled = disabled; alphaInput.setAttribute('aria-label', `${title}透明度`);
+        alphaInput.className = 'stcj-alpha-range';
+        const output = element('output', '', `${alpha}%`);
+        const commit = () => {
+          if (!target || !beginAppearanceEdit('修改轮盘颜色')) return;
+          const pct = Number(alphaInput.value); output.textContent = `${pct}%`;
+          target[key] = pct >= 100 ? colorInput.value : colorInput.value + Math.round(pct / 100 * 255).toString(16).padStart(2, '0');
+          Object.assign(target, normalizeRadialAppearance(target)); save();
+        };
+        colorInput.addEventListener('input', commit); alphaInput.addEventListener('input', commit);
+        control.append(colorInput, alphaInput, output); row.append(control); parent.append(row);
+        return colorInput;
       }
       field(palette, '配色方案', { choices: Object.entries(RADIAL_THEMES).map(([id, t]) => [id, t.label]), value: a.theme, disabled, onChange: v => {
         if (!beginAppearanceEdit('切换配色方案')) return; const preset = defaultRadialAppearance(v);
@@ -278,14 +301,13 @@ export function createFeature({ dependencies }) {
         save(); renderAppearance(); renderEditor();
       } });
       styleField(palette, '轮盘形态', 'shape', { choices: [['ring', '分区圆环'], ['petals', '疏朗花瓣'], ['solid', '连续圆环']] });
-      for (const [title, key] of [['扇区底色', 'surface'], ['选中填色', 'highlight'], ['高亮描边', 'accent'], ['扇区边框', 'border'], ['文字颜色', 'text'], ['中心核颜色', 'center']]) styleField(palette, title, key, { type: 'color', live: true, proOnly: true });
+      for (const [title, key] of [['扇区底色', 'surface'], ['选中填色', 'highlight'], ['高亮描边', 'accent'], ['扇区边框', 'border'], ['文字颜色', 'text'], ['中心核颜色', 'center']]) colorField(palette, title, key);
       const geometry = card(appearanceControls, '几何与文字');
       field(geometry, '基础半径 · px', { type: 'range', value: config.radius, min: 80, max: 200, live: true, onChange: v => { config.radius = v; config.cancelDistance = Math.max(config.cancelDistance, v + 40); save(); } });
-      for (const [title, key, min, max, proOnly] of [['独立尺寸 · %', 'scale', 70, 130, false], ['中心留白 · %', 'innerRatio', 25, 65, true], ['扇区间隙 · °', 'gap', 0, 16, true], ['起始旋转 · °', 'rotation', -180, 180, true], ['文字大小 · px', 'fontSize', 10, 20, false], ['背景不透明度 · %', 'opacity', 45, 100, true], ['选中光晕 · px', 'glow', 0, 30, true]]) {
+      for (const [title, key, min, max, proOnly] of [['独立尺寸 · %', 'scale', 70, 130, false], ['中心留白 · %', 'innerRatio', 25, 65, true], ['扇区间隙 · °', 'gap', 0, 16, true], ['扇区边缘平滑倒角 · px', 'corner', 0, 16, false], ['起始旋转 · °', 'rotation', -180, 180, true], ['文字大小 · px', 'fontSize', 10, 20, false], ['背景不透明度 · %', 'opacity', 45, 100, true], ['选中光晕 · px', 'glow', 0, 30, true]]) {
         if (menu.id !== 'main' && ['rotation', 'scale', 'innerRatio'].includes(key)) continue;
         styleField(geometry, title, key, { type: 'range', min, max, live: true, proOnly });
       }
-      styleField(geometry, '显示图标', 'showIcons', { type: 'checkbox', hint: '名称显示在「扇区与动作」中按格子单独设置。' });
       const centerInput = styleField(geometry, '中心核符号', 'centerSymbol', { type: 'text', hint: '仅文本符号，不加载图片或外部字体。', proOnly: true }); centerInput.maxLength = 6;
       button(geometry, '重置当前外观', () => { if (!beginAppearanceEdit('重置当前外观')) return; if (menu.id === 'main') { config.appearance = defaultRadialAppearance(); menu.appearance = null; } else menu.appearance = defaultRadialAppearance(); save(); renderAppearance(); renderEditor(); });
     }
@@ -332,8 +354,22 @@ export function createFeature({ dependencies }) {
       if (isSub) button(inspector, '返回父动作', () => { subSlotIndex = -1; menuId = 'main'; renderEditor(); renderAppearance(); renderPreviews(); });
       field(inspector, '动作名称', { value: item.label, aria: '动作名称', onChange: v => mutateSelected('修改动作名称', selected => { selected.label = v || '未设置'; }) });
       field(inspector, '在轮盘上显示名称', { type: 'checkbox', value: !!item.showLabel, aria: '在轮盘上显示名称', onChange: v => mutateSelected(v ? '显示动作名称' : '隐藏动作名称', selected => { selected.showLabel = v; }) });
-      if (!item.submenu) {
-        const type = actionTypeOf(item);
+      field(inspector, '在轮盘上显示图标', { type: 'checkbox', value: item.showIcon !== false, aria: '在轮盘上显示图标', onChange: v => mutateSelected(v ? '显示动作图标' : '隐藏动作图标', selected => { selected.showIcon = v; }) });
+      const iconChoices = [['', '跟随动作（默认）'], ...listIconChoices().map(c => [c.id, `${c.group} · ${c.label}`])];
+      if (item.iconPath) iconChoices.unshift(['custom', '自定义矢量路径']);
+      field(inspector, '图标', { value: item.iconPath ? 'custom' : (item.iconId || ''), choices: iconChoices, aria: '动作图标', onChange: v => mutateSelected('修改动作图标', selected => {
+        if (v === 'custom') return;
+        delete selected.iconPath; if (v) selected.iconId = v; else delete selected.iconId;
+      }) });
+      const pathInput = field(inspector, '自定义 SVG 路径', { value: item.iconPath || '', aria: '自定义 SVG 路径', hint: '粘贴 24×24 的 path d 数据（如 StarPie / Material 图标）；留空恢复上方选择。只接受路径命令与数字。', onChange: v => {
+        const raw = String(v || '').trim();
+        const clean = sanitizeIconPath(raw);
+        if (raw && !clean) { status.textContent = '路径无效：只接受以 M 开头的 SVG 路径命令与数字；未修改配置'; return; }
+        mutateSelected(clean ? '设置自定义图标' : '清除自定义图标', selected => { if (clean) selected.iconPath = clean; else delete selected.iconPath; });
+      } });
+      pathInput.maxLength = ICON_PATH_MAX; pathInput.spellcheck = false;
+      {
+        const type = item.submenu && !item.action ? 'empty' : actionTypeOf(item);
         const typeChoices = Object.entries(ACTION_TYPES).map(([id, t]) => [id, t.label]);
         if (!typeChoices.some(c => c[0] === type)) typeChoices.push([type, `${type}（未支持，保留）`]);
         field(inspector, '动作类型', { value: type, choices: typeChoices, onChange: v => mutateSelected('修改动作类型', selected => {
@@ -341,7 +377,7 @@ export function createFeature({ dependencies }) {
           if (v !== 'empty' && !first) throw new Error('该动作类型暂无可用动作；未修改配置');
           delete selected.action;
           if (first) { selected.action = { type: first.type, id: first.id }; if (!selected.label || selected.label === '未设置') selected.label = first.label; selected.showLabel = true; }
-          else selected.showLabel = false;
+          else if (!selected.submenu) selected.showLabel = false;
         }) });
         if (item.action) {
           const choices = actions.filter(a => a.type === item.action.type).map(a => [`${a.type}:${a.id}`, a.label]), selected = `${item.action.type}:${item.action.id}`;
@@ -353,12 +389,13 @@ export function createFeature({ dependencies }) {
             if (next && (!selected.label || selected.label === '未设置' || selected.label === previous?.label)) selected.label = next.label;
           }) });
         }
-      } else inspector.append(element('p', 'stcj-settings-note', '该一级格子打开二级动作。点击外侧子格编辑其动作。'));
+        if (item.submenu) inspector.append(element('p', 'stcj-settings-note', item.action ? '此父格点击 / 松开 / Enter 执行自身动作；悬停或外滑展开二级，Shift+Enter 键盘进入二级。' : '该一级格子打开二级动作；也可为它设置自身动作。点击外侧子格编辑其动作。'));
+      }
       const tools = element('div', 'stcj-editor-tools'); inspector.append(tools);
       button(tools, '📋 复制动作', () => { clipboardSlot = copy(item); renderEditor(); });
-      button(tools, '📥 粘贴动作', () => mutateSelected('粘贴动作', selected => { const next = copy(clipboardSlot); delete next.submenu; const linked = selected.submenu; Object.keys(selected).forEach(k => delete selected[k]); Object.assign(selected, next); if (linked) { selected.submenu = linked; delete selected.action; } })).disabled = !clipboardSlot || !!item.submenu || !!clipboardSlot?.submenu;
+      button(tools, '📥 粘贴动作', () => mutateSelected('粘贴动作', selected => { const next = copy(clipboardSlot); delete next.submenu; const linked = selected.submenu; Object.keys(selected).forEach(k => delete selected[k]); Object.assign(selected, next); if (linked) selected.submenu = linked; })).disabled = !clipboardSlot;
       if (isSub) button(tools, '删除此子动作', () => change('删除子动作', () => { const owned = ownChild(config, slotIndex); owned.items.splice(subSlotIndex, 1); subSlotIndex = -1; menuId = 'main'; }));
-      else button(tools, '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.submenu; selected.label = '未设置'; selected.showLabel = false; }));
+      else button(tools, item.submenu ? '清空父格自身动作' : '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.iconId; delete selected.iconPath; if (!selected.submenu) { selected.label = '未设置'; selected.showLabel = false; } })).disabled = !!item.submenu && !item.action;
       const children = card(editor, '当前格子的二级动作'); children.dataset.inlineSubwheel = 'true';
       if (sub) children.append(element('p', 'stcj-settings-note', `${sub.items.length} 个子动作；点击画布外侧格子编辑。${mainMenu().items.filter(i => i.submenu === sub.id).length > 1 ? '旧配置共享组：编辑时自动复制，仅影响当前父格。' : ''}`));
       const add = button(children, '+ 添加二级动作', () => change('添加二级动作', () => { const child = addChild(config, slotIndex); subSlotIndex = child.items.length - 1; menuId = child.id; subMenuId = child.id; }));

@@ -1,9 +1,10 @@
 import { normalizeRadialAppearance } from './radial-config.js';
 import { actionIconSvg, iconSvg } from './action-catalog.js';
+import { resolveIconSource } from './icon-library.js';
 
 export const requiredServices = [];
 // Original browser renderer. Geometry is standard polar math, not a port of an upstream renderer.
-export function sectorGeometry(index, count, radius, innerRadius, gap = 3, rotation = 0, arc = null) {
+export function sectorGeometry(index, count, radius, innerRadius, gap = 3, rotation = 0, arc = null, corner = 0) {
   if (!Number.isFinite(count) || count < 1) return { path: '', polygon: '', angle: 0 };
   const span = arc ? arc.span : 360;
   const arcStart = arc ? arc.start : -90 + rotation - 180 / count;
@@ -11,9 +12,25 @@ export function sectorGeometry(index, count, radius, innerRadius, gap = 3, rotat
   const start = arcStart + index * step + space / 2;
   const end = start + Math.min(359.95, step - space);
   const point = (angle, r) => { const a = angle * Math.PI / 180; return [radius + Math.cos(a) * r, radius + Math.sin(a) * r]; };
-  const [a, b, c, d] = [point(start, radius - 2), point(end, radius - 2), point(end, innerRadius), point(start, innerRadius)];
+  const fmt = p => p.map(n => +n.toFixed(3)).join(' ');
   const large = end - start > 180 ? 1 : 0;
-  const path = `M ${a.join(' ')} A ${radius - 2} ${radius - 2} 0 ${large} 1 ${b.join(' ')} L ${c.join(' ')} A ${innerRadius} ${innerRadius} 0 ${large} 0 ${d.join(' ')} Z`;
+  const outer = radius - 2, sweepRad = (end - start) * Math.PI / 180;
+  // Smooth corners: fillet size is limited by ring thickness and by each arc's length.
+  const full = end - start >= 359;
+  const r = full ? 0 : Math.max(0, Math.min(Number(corner) || 0, (outer - innerRadius) / 2 - .5, innerRadius * sweepRad * .45, outer * sweepRad * .45));
+  let path;
+  if (r < .05) {
+    const [a, b, c, d] = [point(start, outer), point(end, outer), point(end, innerRadius), point(start, innerRadius)];
+    path = `M ${fmt(a)} A ${outer} ${outer} 0 ${large} 1 ${fmt(b)} L ${fmt(c)} A ${innerRadius} ${innerRadius} 0 ${large} 0 ${fmt(d)} Z`;
+  } else {
+    const dOut = r / outer * 180 / Math.PI, dIn = r / innerRadius * 180 / Math.PI;
+    const largeOut = end - start - 2 * dOut > 180 ? 1 : 0, largeIn = end - start - 2 * dIn > 180 ? 1 : 0;
+    path = `M ${fmt(point(start + dOut, outer))} A ${outer} ${outer} 0 ${largeOut} 1 ${fmt(point(end - dOut, outer))}`
+      + ` Q ${fmt(point(end, outer))} ${fmt(point(end, outer - r))} L ${fmt(point(end, innerRadius + r))}`
+      + ` Q ${fmt(point(end, innerRadius))} ${fmt(point(end - dIn, innerRadius))} A ${innerRadius} ${innerRadius} 0 ${largeIn} 0 ${fmt(point(start + dIn, innerRadius))}`
+      + ` Q ${fmt(point(start, innerRadius))} ${fmt(point(start, innerRadius + r))} L ${fmt(point(start, outer - r))}`
+      + ` Q ${fmt(point(start, outer))} ${fmt(point(start + dOut, outer))} Z`;
+  }
   const points = [], samples = Math.max(5, Math.ceil((end - start) / 5));
   for (let i = 0; i <= samples; i++) points.push(point(start + (end - start) * i / samples, radius));
   for (let i = samples; i >= 0; i--) points.push(point(start + (end - start) * i / samples, innerRadius));
@@ -53,7 +70,34 @@ export function resolveSubringBounds(radius, innerRadius, subAppearance, preview
   return { subInner, subOuter };
 }
 // Same trusted SVG set as the floating toolbar (action-catalog.js); empty cells have no icon.
-export function sectorIconSvg(item) { return item?.submenu ? iconSvg('more') : actionIconSvg(item?.action); }
+// A chosen library/custom icon wins over the action's default icon.
+export function sectorIconSvg(item) {
+  const source = resolveIconSource(item);
+  if (source?.markup) return source.markup;
+  if (source?.path) return '';
+  return item?.action ? actionIconSvg(item.action) : item?.submenu ? iconSvg('more') : '';
+}
+// Builds the icon node with DOM APIs; custom path data is pre-validated and never parsed as markup.
+export function createSectorIcon(item) {
+  if (!item || item.showIcon === false) return null;
+  const source = resolveIconSource(item);
+  const icon = document.createElement('span');
+  icon.className = 'stcj-sector-icon';
+  if (source?.path) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'currentColor');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', source.path);
+    svg.append(path); icon.append(svg);
+    return icon;
+  }
+  const markup = sectorIconSvg(item);
+  if (!markup) return null;
+  icon.innerHTML = markup;
+  return icon;
+}
 
 function applyWheelVariables(target, a) {
   const variables = {
@@ -74,14 +118,14 @@ function buildRingButtons({ container, items, count, outerRadius, innerRadius, a
   const gap = appearance.shape === 'solid' ? 0 : appearance.gap + (appearance.shape === 'petals' ? 4 : 0);
   const arcFraction = arc ? arc.span / 360 : 1;
   return items.map((item, index) => {
-    const geometry = sectorGeometry(index, count, outerRadius, innerRadius, gap, appearance.rotation, arc);
+    const geometry = sectorGeometry(index, count, outerRadius, innerRadius, gap, appearance.rotation, arc, appearance.corner);
     const distance = (outerRadius + innerRadius) / 2;
     // Narrow child cells keep the icon and expose the label through title/aria instead of clipping it.
-    const compact = tier === 'sub' && appearance.showIcons && 2 * Math.PI * distance * arcFraction / Math.max(1, count) < 46;
+    const compact = tier === 'sub' && item.showIcon !== false && 2 * Math.PI * distance * arcFraction / Math.max(1, count) < 46;
     const isEmpty = !item.action && !item.submenu;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `${className}${index === parentOpenIndex ? ' is-submenu-open' : ''}${isEmpty ? ' is-empty-sector' : ''}${compact ? ' is-compact' : ''}`;
+    button.className = `${className}${index === parentOpenIndex ? ' is-submenu-open' : ''}${isEmpty ? ' is-empty-sector' : ''}${compact ? ' is-compact' : ''}${item.submenu && item.action ? ' has-parent-action' : ''}`;
     button.title = item.label;
     button.setAttribute('role', 'menuitem');
     button.setAttribute('aria-label', `${index + 1}. ${item.label}${item.submenu ? '，子轮盘' : ''}`);
@@ -103,13 +147,8 @@ function buildRingButtons({ container, items, count, outerRadius, innerRadius, a
     content.style.top = `${outerRadius + Math.sin(angle) * distance}px`;
     content.style.width = `${Math.max(32, Math.min((outerRadius - innerRadius) * (tier === 'sub' ? 2.1 : 1.35), 2 * Math.PI * distance * arcFraction / Math.max(1, count) * .73))}px`;
     if (item.color) content.style.color = item.color;
-    const svgMarkup = appearance.showIcons ? sectorIconSvg(item) : '';
-    if (svgMarkup) {
-      const icon = document.createElement('span');
-      icon.className = 'stcj-sector-icon';
-      icon.innerHTML = svgMarkup;
-      content.append(icon);
-    }
+    const icon = createSectorIcon(item);
+    if (icon) content.append(icon);
     if (item.showLabel) {
       const label = document.createElement('span');
       label.className = 'stcj-sector-label';

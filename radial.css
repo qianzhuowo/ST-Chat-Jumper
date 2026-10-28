@@ -64,7 +64,7 @@
 .stcj-scheme-row { border:1px solid var(--cj-line); border-radius:9px; padding:12px; margin:10px 0; display:flex; flex-wrap:wrap; align-items:center; gap:10px; }.stcj-scheme-row strong { flex:1; }.stcj-scheme-row small { color:var(--cj-muted); }.stcj-config-json { width:100%; resize:vertical; font:11px/1.6 ui-monospace,monospace!important; }.stcj-config-card a { color:var(--cj-accent); text-decoration:none; font-size:12px; }.stcj-radial-settings { border:0; margin:0; padding:0; }
 #stcj-page-toolbar .stcj-settings-size,#stcj-page-toolbar .stcj-settings-range-options,#stcj-page-toolbar .stcj-settings-list { background:var(--cj-card); border:1px solid var(--cj-line); border-radius:13px; padding:16px; box-shadow:none; color:var(--cj-text); }#stcj-page-toolbar .stcj-settings-item { background:transparent; border-color:var(--cj-line); }#stcj-page-toolbar .stcj-settings-label { font-size:12px; flex:1; }#stcj-page-toolbar #stcj-size-slider { width:100%; max-width:none; }
 /* Polar sectors: each clipped button has its own SVG arc, label and hit target. Co-screen subring renders concentrically around primary ring. */
-.stcj-radial-overlay { position:fixed; inset:0; z-index:2147483600; background:#07101c24; touch-action:none; user-select:none; -webkit-user-select:none; }
+.stcj-radial-overlay { position:fixed; inset:0; z-index:2147483600; background:transparent; touch-action:none; user-select:none; -webkit-user-select:none; }
 .stcj-radial-ring { position:absolute; transform:translate(-50%,-50%); isolation:isolate; filter:drop-shadow(0 7px 13px #0005); border-radius:50%; overflow:visible; user-select:none; -webkit-user-select:none; }
 .stcj-radial-subring { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); border-radius:50%; pointer-events:none; z-index:1; overflow:visible; }
 .stcj-radial-subring .is-compact .stcj-sector-label, .stcj-radial-subring .is-compact .stcj-sector-child { display:none; }
@@ -98,3 +98,9 @@
 .stcj-inspector-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:0 0 10px; }
 .stcj-inspector-head h3 { margin:0!important; }
 .stcj-direction-badge { flex-shrink:0; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:600; background:var(--cj-soft); color:var(--cj-accent); border:1px solid var(--cj-line); }
+
+/* Colour + alpha pair; parent cells that also run their own action get a dot badge. */
+.stcj-color-alpha-row .stcj-setting-control { display:flex; align-items:center; gap:8px; }
+.stcj-color-alpha-row .stcj-alpha-range { width:88px; min-width:0; }
+.stcj-color-alpha-row output { min-width:36px; text-align:right; font-variant-numeric:tabular-nums; }
+.stcj-radial-sector.has-parent-action .stcj-sector-content::before { content:''; position:absolute; top:-6px; right:-6px; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.7; }

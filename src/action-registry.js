@@ -1,5 +1,5 @@
 import { ACTION_CATALOG } from './action-catalog.js';
-export const requiredServices = ['handleAction', 'toastInfo'];
+export const requiredServices = ['handleAction', 'toastInfo', 'toggleGlobalHide'];
 
 // No DOM clicks, eval, or host-private imports. Future action providers register
 // a namespaced ID and handler and keep their own host capability checks.
@@ -14,7 +14,7 @@ export function createFeature({ dependencies }) {
     actions.set(key, { ...action });
     return () => actions.delete(key);
   }
-  for (const item of ACTION_CATALOG) registerShortcutAction({ type: 'plugin', id: item.id, label: item.label, icon: item.icon, execute: () => dependencies.handleAction(item.run || item.id) });
+  for (const item of ACTION_CATALOG) registerShortcutAction({ type: 'plugin', id: item.id, label: item.label, icon: item.icon, execute: () => item.service === 'toggleGlobalHide' ? dependencies.toggleGlobalHide() : dependencies.handleAction(item.run || item.id) });
   function listShortcutActions() { return [...actions.values()].map(({ type, id, label, icon }) => ({ type, id, label, icon })); }
   async function executeShortcutAction(ref) {
     const action = actions.get(`${ref?.type}:${ref?.id}`);
