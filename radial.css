@@ -55,8 +55,13 @@
 .stcj-subslot-inspector,.stcj-inline-appearance-box { margin-top:12px; padding-top:12px; border-top:1px dashed var(--cj-line); }
 .stcj-inline-subtitle { margin:0 0 8px; font-size:13px; font-weight:700; color:var(--cj-text); }
 .stcj-preview-card { position:sticky; top:0; overflow:hidden; padding:18px; }.stcj-preview-card>h3 { padding-right:45px; }.stcj-preview-badge { position:absolute; right:18px; top:19px; background:#2aa37517; color:#35a87e; padding:2px 6px; font-size:10px; font-weight:750; border-radius:4px; letter-spacing:.06em; }
-.stcj-canvas-toolbar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:4px; margin:0 0 8px; }
+.stcj-canvas-toolbar { position:absolute; top:8px; right:8px; z-index:3; display:flex; align-items:center; gap:4px; padding:3px; border-radius:8px; background:color-mix(in srgb,var(--cj-bg) 82%,transparent); }
+.stcj-edit-canvas, .stcj-preview-canvas { position:relative; }
 #stcj-settings-window .stcj-canvas-tool-btn,#stcj-settings-window .stcj-canvas-zoom-label { padding:3px 8px; font-size:11px; border-radius:6px; }
+.stcj-canvas-modes { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; margin:0 0 8px; }
+.stcj-canvas-segment { display:inline-flex; gap:2px; padding:2px; border-radius:8px; background:color-mix(in srgb, currentColor 8%, transparent); }
+#stcj-settings-window .stcj-canvas-mode-btn { padding:3px 9px; font-size:11px; border-radius:6px; opacity:.75; }
+#stcj-settings-window .stcj-canvas-mode-btn.is-active { opacity:1; font-weight:600; box-shadow:inset 0 0 0 1px currentColor; }
 .stcj-preview-canvas { height:350px; min-width:0; display:grid; place-items:center; overflow:hidden; border:1px solid var(--cj-line); border-radius:12px; background:radial-gradient(circle at center,color-mix(in srgb,var(--cj-accent) 6%,var(--cj-bg)),var(--cj-bg)); background-image:radial-gradient(var(--cj-line) .7px,transparent .7px); background-size:12px 12px; }
 .stcj-canvas-indicator { margin:8px 0 2px; padding:4px 9px; border-radius:6px; background:var(--cj-soft); color:var(--cj-accent); font-size:11px; font-weight:650; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .stcj-preview-caption { text-align:center; color:var(--cj-muted); font-size:11px; min-height:28px; margin:4px 0 8px; }

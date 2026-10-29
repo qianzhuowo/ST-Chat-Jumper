@@ -189,6 +189,9 @@ export function createFeature() {
     parentIndex = -1,
     activeTier = 'main',
     preview = false,
+    // Preview only: every parent's secondary arc at once, as [{ parentIndex, menu, appearance }].
+    cascade = null,
+    onCascadeChoose,
   }) {
     const a = normalizeRadialAppearance(appearance);
     const hasSubmenu = !!(submenu && Array.isArray(submenu.items) && submenu.items.length > 0);
@@ -235,6 +238,30 @@ export function createFeature() {
         arc: subArc,
       });
       ring.append(subringEl);
+    }
+
+    // Cascade preview: each child group sits inside its own parent's angle, so the arcs never overlap.
+    const cascadeGroups = [];
+    for (const group of hasSubmenu ? [] : cascade || []) {
+      if (!group?.menu?.items?.length) continue;
+      const groupA = normalizeRadialAppearance(group.appearance || group.menu.appearance || appearance);
+      const arc = resolveSubringArc(menu.items.length, group.parentIndex, group.menu.items.length, a.rotation);
+      if (!arc) continue;
+      const groupBounds = resolveSubringBounds(radius, inner, groupA, preview);
+      const el = document.createElement('div');
+      el.className = `stcj-radial-subring stcj-wheel-${groupA.shape} is-fan is-cascade`;
+      el.dataset.submenuId = group.menu.id; el.dataset.layout = 'fan'; el.dataset.parentIndex = group.parentIndex;
+      el.setAttribute('role', 'group'); el.setAttribute('aria-label', `第 ${group.parentIndex + 1} 格 · ${group.menu.label} 二级`);
+      el.style.width = el.style.height = `${groupBounds.subOuter * 2}px`;
+      applyWheelVariables(el, groupA);
+      const groupButtons = buildRingButtons({
+        container: el, items: group.menu.items, count: group.menu.items.length,
+        outerRadius: groupBounds.subOuter, innerRadius: groupBounds.subInner, appearance: groupA,
+        className: 'stcj-radial-subitem', indexAttr: 'subIndex', tier: 'sub',
+        onClick: i => onCascadeChoose?.(group.parentIndex, i), arc,
+      });
+      groupButtons.forEach((b, i) => b.classList.toggle('is-selected', group.parentIndex === parentIndex && i === subSelected));
+      ring.append(el); cascadeGroups.push({ parentIndex: group.parentIndex, buttons: groupButtons });
     }
 
     const mainClassName = hasSubmenu && activeTier === 'sub' ? 'stcj-radial-parent-item' : 'stcj-radial-item';
@@ -288,7 +315,7 @@ export function createFeature() {
     }
     setSelected(selected);
     setSubSelected(subSelected);
-    return { element: ring, buttons, subButtons, subring: subringEl, center, setSelected, setSubSelected, subringBounds: bounds, subArc, subRotation: subA ? subA.rotation : 0 };
+    return { element: ring, buttons, subButtons, cascadeGroups, subring: subringEl, center, setSelected, setSubSelected, subringBounds: bounds, subArc, subRotation: subA ? subA.rotation : 0 };
   }
   return { createRadialView };
 }

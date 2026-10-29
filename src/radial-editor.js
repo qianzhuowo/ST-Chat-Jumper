@@ -14,6 +14,12 @@ function nextId(config) {
   let n = 1; while (config.menus.some(m => m.id === `child-${n}`)) n++;
   return `child-${n}`;
 }
+export const blankCell = () => ({ label: '未设置', showLabel: false });
+// Clears a sector's own content. A parent keeps its secondary group; clearing never touches it.
+export function clearCell(item) {
+  for (const key of Object.keys(item)) if (key !== 'submenu') delete item[key];
+  Object.assign(item, blankCell());
+}
 export function ownChild(config, index) {
   const main = config.menus.find(m => m.id === 'main'), parent = main?.items[index];
   if (!parent) throw new Error('请先选择一级格子');
@@ -32,18 +38,15 @@ export function addChild(config, index, archiveId = null) {
   if (child) {
     if (child.items.length >= 12) throw new Error('最多 12 个二级动作');
     child = ownChild(config, index);
-    child.items.push({ label: `子动作 ${child.items.length + 1}` });
+    child.items.push(blankCell());
     return child;
   }
   const archived = archiveId && archivedChildren(config).find(m => m.id === archiveId);
   if (archiveId && !archived) throw new Error('归档子动作不可用');
-  if (archived && parent.action && archived.items.length >= 12) throw new Error('归档已满，无法保留当前一级动作；未修改配置。');
-  child = archived || { id: nextId(config), label: '二级动作', appearance: null, items: [] };
+  // The parent keeps its own content in place; a new group starts with one blank child sector.
+  child = archived || { id: nextId(config), label: '二级动作', appearance: null, items: [blankCell()] };
   if (!archived) config.menus.push(child);
-  // A former direct action is retained as the first child, never silently discarded.
-  if (parent.action) child.items.unshift(copy(parent));
-  if (!archived) child.items.push({ label: `子动作 ${child.items.length + 1}` });
-  parent.submenu = child.id; delete parent.action;
+  parent.submenu = child.id;
   return child;
 }
 // Deletes one child sector. Deleting the last one also unlinks the parent and drops the empty group.
@@ -54,6 +57,26 @@ export function removeChild(config, index, subIndex) {
   delete config.menus.find(m => m.id === 'main').items[index].submenu;
   config.menus = config.menus.filter(m => m !== child);
   return null;
+}
+// One sector's content is everything but its secondary binding, which always stays with the position.
+function replaceContent(item, next) {
+  const binding = item.submenu;
+  for (const key of Object.keys(item)) delete item[key];
+  Object.assign(item, next);
+  if (binding) item.submenu = binding;
+}
+const contentOf = item => { const { submenu, ...rest } = copy(item); return rest; };
+// Swaps two canvas cells. A cell is { tier: 'main' | 'sub', index, parent } (parent: main index owning a sub cell).
+// Parents swapped with link on carry their secondary group; every other swap exchanges content only.
+export function swapCells(config, from, to, link = true) {
+  const main = config.menus.find(m => m.id === 'main');
+  const menuOf = cell => cell.tier === 'sub' ? ownChild(config, cell.parent) : main;
+  const fromMenu = menuOf(from), toMenu = menuOf(to);
+  const a = fromMenu.items[from.index], b = toMenu.items[to.index];
+  if (!a || !b || a === b) return false;
+  if (fromMenu === toMenu && (from.tier === 'sub' || link)) return swapSlots(fromMenu.items, from.index, to.index);
+  const next = contentOf(b); replaceContent(b, contentOf(a)); replaceContent(a, next);
+  return true;
 }
 export function resizePrimary(config, count) {
   if (!PRIMARY_COUNTS.includes(count)) throw new Error('仅支持 4、8、12 方位');

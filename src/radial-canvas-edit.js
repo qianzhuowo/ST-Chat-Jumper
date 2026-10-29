@@ -1,16 +1,18 @@
-// Settings-only Pointer Events. Swaps within a tier; never dispatches actions.
+// Settings-only Pointer Events. Swaps any two cells, also across tiers; never dispatches actions.
+// A cell is { tier: 'main' | 'sub', index, parent } read from data-edit-tier / -index / -parent.
 const suppressUntil = new WeakMap();
 export function bindCanvasSwap(canvas, onSwap, onCancel = () => {}) {
   let drag = null;
   const listeners = [];
   const on = (target, type, handler, capture = false) => { target.addEventListener(type, handler, capture); listeners.push(() => target.removeEventListener(type, handler, capture)); };
   const cell = target => target?.closest?.('[data-edit-tier][data-edit-index]');
+  const cellOf = b => ({ tier: b.dataset.editTier, index: Number(b.dataset.editIndex), parent: b.dataset.editParent == null ? -1 : Number(b.dataset.editParent) });
   const clear = () => { const old = drag; drag = null; canvas.classList.remove('is-dragging'); canvas.querySelectorAll('.is-drop-target').forEach(b => b.classList.remove('is-drop-target')); if (old && canvas.hasPointerCapture?.(old.id)) canvas.releasePointerCapture(old.id); };
   const cancel = () => { if (!drag) return; suppressUntil.set(canvas, Date.now() + 500); clear(); onCancel(); };
   on(canvas, 'pointerdown', e => {
     if (drag || e.isPrimary === false || e.button !== 0) return;
     const b = cell(e.target); if (!b || !canvas.contains(b)) return;
-    drag = { id: e.pointerId, tier: b.dataset.editTier, index: Number(b.dataset.editIndex), x: e.clientX, y: e.clientY, moved: false };
+    drag = { id: e.pointerId, from: cellOf(b), x: e.clientX, y: e.clientY, moved: false };
   });
   on(window, 'pointermove', e => {
     if (!drag || drag.id !== e.pointerId) return;
@@ -19,7 +21,7 @@ export function bindCanvasSwap(canvas, onSwap, onCancel = () => {}) {
     drag.moved = true; e.preventDefault(); canvas.classList.add('is-dragging');
     canvas.querySelectorAll('.is-drop-target').forEach(b => b.classList.remove('is-drop-target'));
     const target = cell(document.elementFromPoint(e.clientX, e.clientY));
-    if (target && canvas.contains(target) && target.dataset.editTier === drag.tier) target.classList.add('is-drop-target');
+    if (target && canvas.contains(target)) target.classList.add('is-drop-target');
   });
   on(window, 'pointerup', e => {
     if (!drag || drag.id !== e.pointerId) return;
@@ -27,7 +29,7 @@ export function bindCanvasSwap(canvas, onSwap, onCancel = () => {}) {
     clear();
     if (!state.moved) return;
     e.preventDefault(); suppressUntil.set(canvas, Date.now() + 500);
-    if (target && canvas.contains(target) && target.dataset.editTier === state.tier) onSwap(state.tier, state.index, Number(target.dataset.editIndex));
+    if (target && canvas.contains(target)) onSwap(state.from, cellOf(target));
     else onCancel();
   });
   on(canvas, 'click', e => { if (Date.now() < (suppressUntil.get(canvas) || 0)) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
@@ -40,7 +42,7 @@ export function bindCanvasSwap(canvas, onSwap, onCancel = () => {}) {
     const b = cell(e.target); if (!b || !e.altKey || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
     e.preventDefault(); e.stopPropagation();
     const delta = ['ArrowLeft', 'ArrowUp'].includes(e.key) ? -1 : 1;
-    onSwap(b.dataset.editTier, Number(b.dataset.editIndex), Number(b.dataset.editIndex) + delta);
+    const from = cellOf(b); onSwap(from, { ...from, index: from.index + delta });
   });
   on(window, 'blur', cancel); on(window, 'scroll', cancel, true);
   return () => { clear(); listeners.splice(0).forEach(off => off()); };

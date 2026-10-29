@@ -493,8 +493,8 @@ test('settings UI supports same-page primary/secondary free editing, co-screen p
   findBtn('↷ 重做').emit('click'); assert.equal(savedConfig.menus[0].items.length, 4);
   canvasCell('main', 0).emit('click'); findBtn('+ 添加二级动作').emit('click');
   const parent = savedConfig.menus[0].items[0], child = savedConfig.menus.find(m => m.id === parent.submenu);
-  assert.ok(child); assert.equal(child.items[0].action.id, 'prev', 'former direct action retained');
-  assert.equal(child.items.length, 2); assert.equal(r.executed.length, 0, 'editor never runs actions');
+  assert.ok(child); assert.equal(parent.action.id, 'prev', 'parent keeps its own action');
+  assert.equal(child.items.length, 1); assert.equal(child.items[0].action, undefined, 'new child is blank'); assert.equal(r.executed.length, 0, 'editor never runs actions');
 
   assert.ok(savedCount > 0);
   settingsFeature.destroyRadialSettings();

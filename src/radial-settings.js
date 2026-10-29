@@ -1,4 +1,4 @@
-import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, removeChild, resizePrimary, swapSlots, affectedByShrink } from './radial-editor.js';
+import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, removeChild, clearCell, swapCells, resizePrimary, swapSlots, affectedByShrink } from './radial-editor.js';
 import { bindCanvasSwap } from './radial-canvas-edit.js';
 import { resolveWheelAppearance, createSectorIcon } from './radial-view.js';
 import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
@@ -195,42 +195,64 @@ export function createFeature({ dependencies }) {
         mutate(menu.items[subSlotIndex >= 0 ? subSlotIndex : slotIndex], menu);
       });
     }
-    function swapCanvas(tier, from, to) {
-      const menu = tier === 'sub' ? activeSubmenu() : mainMenu();
-      if (!menu || from === to || to < 0 || to >= menu.items.length) return;
-      change('画布交换动作', () => {
-        const target = tier === 'sub' ? ownChild(config, slotIndex) : mainMenu();
-        swapSlots(target.items, from, to);
-        if (tier === 'sub') { subSlotIndex = to; menuId = target.id; subMenuId = target.id; }
-        else { slotIndex = to; subSlotIndex = -1; menuId = 'main'; }
+    // Canvas cells are { tier, index, parent }; any two cells swap, parents per the 一二级链接 preference.
+    function swapCanvas(from, to) {
+      const menuOf = cell => cell.tier === 'sub' ? selectedChild(config, cell.parent) : mainMenu();
+      const target = menuOf(to);
+      if (!target || !menuOf(from) || to.index < 0 || to.index >= target.items.length) return;
+      if (from.tier === to.tier && from.index === to.index && from.parent === to.parent) return;
+      change(from.tier === to.tier ? '画布交换动作' : '跨层交换动作', () => {
+        if (!swapCells(config, from, to, config.editorPrefs.linkChildren)) throw new Error('无法交换这两个格子；未修改配置');
+        centerSelected = false;
+        if (to.tier === 'sub') { slotIndex = to.parent; subSlotIndex = to.index; menuId = subMenuId = selectedChild(config, to.parent).id; }
+        else { slotIndex = to.index; subSlotIndex = -1; menuId = 'main'; subMenuId = mainMenu().items[to.index]?.submenu || subMenuId; }
       });
       const focused = previews.find(p => p.canvas.closest('[data-stcj-page="actions"]'));
-      focused?.canvas.querySelector(`[data-edit-tier="${tier}"][data-edit-index="${to}"]`)?.focus();
+      focused?.canvas.querySelector(`[data-edit-tier="${to.tier}"][data-edit-index="${to.index}"]${to.tier === 'sub' ? `[data-edit-parent="${to.parent}"]` : ''}`)?.focus();
+    }
+    function setEditorPref(key, value, message) {
+      config.editorPrefs = { ...config.editorPrefs, [key]: value };
+      save(message); renderPreviews();
     }
     function preview(parent) {
-      const box = card(parent, '实时动作画布', '从北向开始顺时针。点击格子编辑；拖到同层另一格交换，一级交换携带二级动作。Alt + 方向键也可交换；Esc 取消拖拽。预览绝不执行动作。');
+      const box = card(parent, '实时动作画布', '从北向开始顺时针。点击格子编辑；拖到任意另一格交换，子格也能和父格互换（只换内容，二级关联留在原方位）。Alt + 方向键在同一层交换；Esc 取消拖拽。预览绝不执行动作。');
       box.classList.add('stcj-preview-card');
       const canvasToolbar = element('div', 'stcj-canvas-toolbar');
       const zoomOutBtn = button(canvasToolbar, '−', () => { previewZoom = Math.max(75, previewZoom - 10); renderPreviews(); }, 'stcj-canvas-tool-btn'); zoomOutBtn.setAttribute('aria-label', '缩小预览');
       const zoomResetBtn = button(canvasToolbar, '100%', () => { previewZoom = 100; renderPreviews(); }, 'stcj-canvas-zoom-label'); zoomResetBtn.setAttribute('aria-label', '重置预览缩放');
       const zoomInBtn = button(canvasToolbar, '+', () => { previewZoom = Math.min(130, previewZoom + 10); renderPreviews(); }, 'stcj-canvas-tool-btn'); zoomInBtn.setAttribute('aria-label', '放大预览');
-      box.append(canvasToolbar);
-      const canvas = element('div', 'stcj-preview-canvas stcj-edit-canvas'); box.append(canvas);
+      const modeBar = element('div', 'stcj-canvas-modes');
+      const linkBtn = button(modeBar, '', () => setEditorPref('linkChildren', !config.editorPrefs.linkChildren, config.editorPrefs.linkChildren ? '一二级链接已关闭：交换父格时二级留在原方位' : '一二级链接已开启：交换父格时二级一起移动'), 'stcj-canvas-mode-btn');
+      linkBtn.title = '开启：交换一级格子时连同二级一起换位\n关闭：只交换一级格子自身内容，二级留在原方位';
+      const viewSeg = element('div', 'stcj-canvas-segment'); viewSeg.setAttribute('role', 'radiogroup'); viewSeg.setAttribute('aria-label', '画布显示形式');
+      const viewBtns = [['focus', '一级主轮盘', '点击父格才显示它的二级'], ['cascade', '二级级联', '所有父格与二级一起显示']].map(([id, text, tip]) => {
+        const b = button(viewSeg, text, () => setEditorPref('canvasView', id, `画布显示：${text}`), 'stcj-canvas-mode-btn'); b.dataset.canvasView = id; b.title = tip; b.setAttribute('role', 'radio'); return b;
+      });
+      modeBar.append(viewSeg); box.append(modeBar);
+      // Zoom controls float in the canvas' top-right corner and survive every re-render.
+      const canvas = element('div', 'stcj-preview-canvas stcj-edit-canvas'); canvas.append(canvasToolbar); box.append(canvas);
       const indicator = element('div', 'stcj-canvas-indicator'); box.append(indicator);
       const caption = element('p', 'stcj-preview-caption'); box.append(caption);
-      previews.push({ canvas, caption, indicator, zoomResetBtn, dispose: null });
+      previews.push({ canvas, toolbar: canvasToolbar, caption, indicator, zoomResetBtn, linkBtn, viewBtns, dispose: null });
     }
     function renderPreviews() {
       const main = mainMenu(), sub = activeSubmenu(), mainA = appearance(main);
       for (const p of previews) {
         p.dispose?.(); p.zoomResetBtn.textContent = `${previewZoom}%`;
+        const { linkChildren, canvasView } = config.editorPrefs, cascadeView = canvasView === 'cascade';
+        if (p.linkBtn) { p.linkBtn.textContent = `🔗 一二级链接：${linkChildren ? '开启' : '关闭'}`; p.linkBtn.setAttribute('aria-pressed', String(linkChildren)); p.linkBtn.classList.toggle('is-active', linkChildren); }
+        p.viewBtns?.forEach(b => { const on = b.dataset.canvasView === canvasView; b.classList.toggle('is-active', on); b.setAttribute('aria-checked', String(on)); });
         const available = Math.min(p.canvas.clientWidth || 330, p.canvas.clientHeight || 315) - 24;
-        const fit = Math.max(40, Math.min(available / 3.2, config.radius * mainA.scale / 100));
-        // Fit the full two-ring footprint (sub outer edge ≈ 1.55R) first, then apply preview zoom.
-        const radius = Math.max(32, fit * previewZoom / 100);
+        // The wheel is built at its real runtime size and scaled as a whole, so text and icons keep
+        // the exact proportions of the live wheel. Fit the two-ring footprint (≈ 3.1R) first, then zoom.
+        const radius = config.radius * mainA.scale / 100;
+        const fit = Math.max(40, Math.min(available / 3.2, radius));
+        const scale = Math.max(32, fit * previewZoom / 100) / radius;
         const view = dependencies.createRadialView({
           menu: main, appearance: resolveWheelAppearance(config, main, radius), radius,
-          selected: slotIndex, submenu: sub?.items.length ? sub : null,
+          selected: slotIndex, submenu: !cascadeView && sub?.items.length ? sub : null,
+          cascade: cascadeView ? main.items.map((_, i) => selectedChild(config, i)).map((m, i) => m && { parentIndex: i, menu: m, appearance: resolveWheelAppearance(config, m, radius) }).filter(Boolean) : null,
+          onCascadeChoose: (parent, i) => { centerSelected = false; slotIndex = parent; subSlotIndex = i; menuId = subMenuId = selectedChild(config, parent).id; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
           subAppearance: sub ? resolveWheelAppearance(config, sub, radius) : null,
           subSelected: subSlotIndex, parentIndex: slotIndex, activeTier: subSlotIndex >= 0 ? 'sub' : 'main', preview: true,
           onChoose: i => { centerSelected = false; slotIndex = i; subSlotIndex = -1; menuId = 'main'; subMenuId = main.items[i]?.submenu || null; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
@@ -238,11 +260,13 @@ export function createFeature({ dependencies }) {
           // Clicking the centre selects it so its icon is edited here like any sector.
           onCenter: () => { centerSelected = true; slotIndex = -1; subSlotIndex = -1; menuId = 'main'; pendingCount = null; renderEditor(); renderAppearance(); renderPreviews(); },
         });
-        p.canvas.replaceChildren(view.element);
+        Object.assign(view.element.style, { position: 'absolute', left: '50%', top: '50%', transform: `translate(-50%, -50%) scale(${scale.toFixed(4)})` });
+        p.canvas.replaceChildren(view.element, ...(p.toolbar ? [p.toolbar] : []));
         const centerNode = view.element.querySelector('.stcj-radial-center');
         if (centerNode) { centerNode.classList.toggle('is-selected', centerSelected); centerNode.title = '点击编辑中心核图标'; }
-        for (const [tier, buttons] of [['main', view.buttons], ['sub', view.subButtons]]) (buttons || []).forEach((b, i) => {
-          b.dataset.editTier = tier; b.dataset.editIndex = String(i);
+        const editGroups = [['main', view.buttons, null], ['sub', view.subButtons, slotIndex], ...(view.cascadeGroups || []).map(g => ['sub', g.buttons, g.parentIndex])];
+        for (const [tier, buttons, parent] of editGroups) (buttons || []).forEach((b, i) => {
+          b.dataset.editTier = tier; b.dataset.editIndex = String(i); if (parent != null) b.dataset.editParent = String(parent);
           b.setAttribute('aria-keyshortcuts', 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown');
           b.title += ' · 拖拽交换 / Alt+方向键';
         });
@@ -472,12 +496,11 @@ export function createFeature({ dependencies }) {
       button(tools, '📋 复制动作', () => { clipboardSlot = copy(item); renderEditor(); });
       button(tools, '📥 粘贴动作', () => mutateSelected('粘贴动作', selected => { const next = copy(clipboardSlot); delete next.submenu; const linked = selected.submenu; Object.keys(selected).forEach(k => delete selected[k]); Object.assign(selected, next); if (linked) selected.submenu = linked; })).disabled = !clipboardSlot;
       if (isSub) button(tools, '删除此子动作', () => change('删除子动作', () => { const left = removeChild(config, slotIndex, subSlotIndex); subSlotIndex = -1; menuId = 'main'; if (!left) subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; }));
-      else button(tools, item.submenu ? '清空父格自身动作' : '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.iconId; delete selected.iconPath; if (!selected.submenu) { selected.label = '未设置'; selected.showLabel = false; } })).disabled = !!item.submenu && !item.action;
+      else button(tools, '清空当前动作', () => mutateSelected('清空当前动作', clearCell));
       const children = card(editor, '当前格子的二级动作'); children.dataset.inlineSubwheel = 'true';
       if (sub) children.append(element('p', 'stcj-settings-note', `${sub.items.length} 个子动作；点击画布外侧格子编辑。${mainMenu().items.filter(i => i.submenu === sub.id).length > 1 ? '旧配置共享组：编辑时自动复制，仅影响当前父格。' : ''}`));
       const add = button(children, '+ 添加二级动作', () => change('添加二级动作', () => { const child = addChild(config, slotIndex); subSlotIndex = child.items.length - 1; menuId = child.id; subMenuId = child.id; }));
       add.disabled = !!sub && sub.items.length >= 12;
-      if (!sub && parent.action) children.append(element('p', 'stcj-settings-note', '添加时，现有一级动作会保留为第一个子动作。'));
       if (!sub) {
         const archived = archivedChildren(config);
         if (archived.length) {

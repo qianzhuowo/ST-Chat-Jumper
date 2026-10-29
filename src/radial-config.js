@@ -46,6 +46,8 @@ export function defaultRadialConfig() {
     mouseScope: 'chat', touchScope: 'chat', pcEditor: true, pcComposer: false, touchTwoFinger: true,
     threshold: 24, longPress: 550, tapCount: 2, tapInterval: 320, radius: 120,
     deadZone: 28, cancelDistance: 240, submenuDelay: 400,
+    // Settings canvas only: whether swapping parents carries their secondary groups, and how the canvas shows them.
+    editorPrefs: { linkChildren: true, canvasView: 'focus' },
     menus: [{ id: 'main', label: '主轮盘', items: [slot('prev', '上一楼'), empty(), slot('recent1', '最新楼'), empty(), slot('next', '下一楼'), empty(), slot('quickEdit', '编辑'), empty()] }],
   };
 }
@@ -53,6 +55,8 @@ export function normalizeRadialConfig(raw) {
   const d = defaultRadialConfig();
   const r = raw && typeof raw === 'object' ? raw : {};
   const result = { ...d, appearance: normalizeRadialAppearance(r.appearance) };
+  const prefs = r.editorPrefs && typeof r.editorPrefs === 'object' ? r.editorPrefs : {};
+  result.editorPrefs = { linkChildren: bool(prefs.linkChildren, true), canvasView: ['focus', 'cascade'].includes(prefs.canvasView) ? prefs.canvasView : 'focus' };
   for (const key of ['enabled', 'mouseEnabled', 'keyboardEnabled', 'pcEditor', 'pcComposer', 'touchTwoFinger']) result[key] = bool(r[key], d[key]);
   for (const [key, values] of Object.entries({ panelTheme: ['host', 'light', 'dark'], modifier: ['alt', 'ctrl', 'shift', 'none'], keyModifier: ['alt', 'ctrl', 'shift', 'altShift', 'ctrlShift'], touchMode: ['off', 'longPress', 'multiTap'] })) {
     result[key] = values.includes(r[key]) ? r[key] : d[key];
