@@ -5,7 +5,9 @@
 #stcj-root.stcj-root {
   --stcj-scale: 1;
   position: fixed;
-  z-index: 10000;
+  /* Just above the host's top bar (#top-bar / #top-settings-holder: 3005) and no higher,
+     so other extensions' pages and popups can still cover the toolbar. */
+  z-index: 3006;
   display: flex;
   align-items: center;
   gap: 1px;
