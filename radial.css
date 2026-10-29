@@ -146,3 +146,11 @@
 .stcj-edit-canvas .stcj-radial-center { cursor:pointer; }
 .stcj-edit-canvas .stcj-radial-center.is-selected { outline:2px solid var(--wheel-accent,var(--cj-accent,#4c8dff)); outline-offset:2px; }
 @media(max-width:600px) { .stcj-icon-picker-paste { grid-template-columns:1fr; } .stcj-icon-picker-footer { flex-wrap:wrap; } }
+
+/* 触发与安全: PC / mobile profiles */
+.stcj-device-tabs { display:flex; gap:4px; padding:4px; margin:14px 0 10px; border-radius:12px; border:1px solid var(--cj-line,#8884); background:var(--cj-card,#0002); }
+.stcj-device-tab { flex:1; min-width:0; padding:8px 10px!important; border-radius:9px!important; border:0!important; background:transparent!important; color:var(--cj-muted,#9aa)!important; font-weight:600; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stcj-device-tab.is-active { background:var(--cj-accent,#4c8dff)!important; color:#fff!important; box-shadow:0 2px 8px #0002; }
+.stcj-device-tab:focus-visible { outline:2px solid var(--cj-accent,#4c8dff); outline-offset:2px; }
+.stcj-device-panel[hidden] { display:none!important; }
+.stcj-device-lead { margin:0 0 10px; padding:8px 12px; border-radius:10px; border-left:3px solid var(--cj-accent,#4c8dff); background:var(--cj-soft,#ffffff0d); font-size:12px; line-height:1.55; color:var(--cj-text,inherit); }

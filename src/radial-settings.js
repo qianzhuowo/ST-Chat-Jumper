@@ -239,27 +239,58 @@ export function createFeature({ dependencies }) {
     }
 
     const triggerPage = page('triggers', '触发与安全', '保留原生操作，把快捷动作放在手边。鼠标与触屏均需明确开启。');
-    const enableCard = card(triggerPage, '启用与快捷键', '轮盘与悬浮条独立使用。输入框、交互控件及弹窗不接管；Esc、失焦、滚动或聊天切换安全取消。');
     const triggerFields = [];
     function trigger(parent, label, key, options = {}) {
-      const input = field(parent, label, { type: typeof config[key] === 'boolean' ? 'checkbox' : typeof config[key] === 'number' ? 'number' : 'text', ...options, value: config[key], onChange: v => { config[key] = v; save(); config[key] = dependencies.getRadialConfig()[key]; } });
+      const input = field(parent, label, { type: typeof config[key] === 'boolean' ? 'checkbox' : typeof config[key] === 'number' ? 'number' : 'text', ...options, value: config[key], onChange: v => {
+        config[key] = v; save(); config[key] = dependencies.getRadialConfig()[key];
+      } });
       triggerFields.push([input, key]); return input;
     }
-    trigger(enableCard, '启用快捷轮盘', 'enabled', { hint: '默认关闭，开启后可与悬浮条同时使用。' });
-    trigger(enableCard, '启用快捷键', 'keyboardEnabled');
+    const sharedCard = card(triggerPage, '启用与通用', '轮盘与悬浮条独立使用。普通输入控件和弹窗不接管；Esc、失焦、滚动或聊天切换安全取消。');
+    trigger(sharedCard, '启用快捷轮盘', 'enabled', { hint: '默认关闭；电脑与手机方案共用此开关。' });
+    for (const [label, key, min, max, proOnly] of [['中心取消死区 · px', 'deadZone', 16, 60, false], ['外甩取消距离 · px', 'cancelDistance', 160, 500, false], ['子轮盘悬停 · ms', 'submenuDelay', 200, 1500, true]]) trigger(sharedCard, label, key, { min, max, proOnly });
+
+    // PC and mobile profiles: mouse/keyboard events always use the PC side, touch events the mobile side.
+    const deviceBar = element('div', 'stcj-device-tabs'); deviceBar.setAttribute('role', 'tablist'); deviceBar.setAttribute('aria-label', '触发方案');
+    triggerPage.append(deviceBar);
+    const devicePanels = {};
+    const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
+    function showDevice(id) {
+      for (const [key, panel] of Object.entries(devicePanels)) panel.hidden = key !== id;
+      deviceBar.querySelectorAll('[data-device-tab]').forEach(b => { const on = b.dataset.deviceTab === id; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+    }
+    for (const [id, text] of [['pc', '🖥 电脑 · 鼠标 / 键盘'], ['mobile', '📱 手机 · 触屏']]) {
+      const tab = button(deviceBar, text, () => showDevice(id), 'stcj-device-tab');
+      tab.dataset.deviceTab = id; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-label', id === 'pc' ? '电脑触发方案' : '手机触发方案');
+      tab.addEventListener('keydown', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); const next = id === 'pc' ? 'mobile' : 'pc'; showDevice(next); deviceBar.querySelector(`[data-device-tab="${next}"]`)?.focus(); } });
+      const panel = element('div', 'stcj-device-panel'); panel.dataset.devicePanel = id; panel.setAttribute('role', 'tabpanel');
+      devicePanels[id] = panel; triggerPage.append(panel);
+    }
+    devicePanels.pc.append(element('p', 'stcj-device-lead', '电脑：按住修饰键 + 鼠标键拖动越过阈值，滑向扇区松手执行；快捷键随时呼出。两者都不会误选文字，因此也可在消息编辑框中使用。'));
+    devicePanels.mobile.append(element('p', 'stcj-device-lead', '手机：在聊天区长按或连击呼出，未激活前的移动让给滚动。编辑框内的长按始终留给系统选字，编辑时用双指轻点呼出。'));
+
+    const keyCard = card(devicePanels.pc, '快捷键', '默认 Alt + Shift + J，在轮盘可用区域或编辑框中按下即在鼠标位置打开。');
+    trigger(keyCard, '启用快捷键', 'keyboardEnabled');
     const mods = [['alt', 'Alt'], ['ctrl', 'Ctrl'], ['shift', 'Shift'], ['altShift', 'Alt + Shift'], ['ctrlShift', 'Ctrl + Shift']];
-    trigger(enableCard, '快捷键修饰键', 'keyModifier', { choices: mods, hint: '默认 Alt + Shift，避开浏览器常用单修饰键快捷键；额外修饰键会被精确拒绝。' });
-    const keyInput = trigger(enableCard, '快捷键字母 / 数字', 'key', { type: 'text', hint: '默认 Alt + Shift + J；建议使用不被浏览器占用的字母。' }); keyInput.maxLength = 1; keyInput.pattern = '[a-zA-Z0-9]';
-    const mouseCard = card(triggerPage, '鼠标手势', '按住修饰键与鼠标键拖动越过阈值，滑向扇区后松手执行；普通右键未拖动时不屏蔽原生菜单。');
+    trigger(keyCard, '快捷键修饰键', 'keyModifier', { choices: mods, hint: '避开浏览器常用单修饰键快捷键；额外修饰键会被精确拒绝。' });
+    const keyInput = trigger(keyCard, '快捷键字母 / 数字', 'key', { type: 'text', hint: '建议使用不被浏览器占用的字母。' }); keyInput.maxLength = 1; keyInput.pattern = '[a-zA-Z0-9]';
+    const mouseCard = card(devicePanels.pc, '鼠标手势', '普通右键未拖动时不屏蔽原生菜单。');
     trigger(mouseCard, '鼠标拖动呼出', 'mouseEnabled');
     trigger(mouseCard, '触发按键', 'mouseButton', { choices: [['2', '右键'], ['1', '中键'], ['3', '侧键 1'], ['4', '侧键 2']] });
     trigger(mouseCard, '鼠标修饰键', 'modifier', { choices: [...mods, ['none', '无（谨慎使用）']] });
     trigger(mouseCard, '拖动阈值 · px', 'threshold', { min: 8, max: 100, proOnly: true });
-    trigger(mouseCard, '手势作用区域', 'scope', { choices: [['chat', '仅聊天区域'], ['page', '页面非交互区域']] });
-    const touchCard = card(triggerPage, '触屏与取消', '未激活前移动让给滚动。长按原地松手后也可点选；浏览器 pointercancel 会取消，不强行锁住页面。');
-    trigger(touchCard, '触屏触发', 'touchMode', { choices: [['off', '关闭'], ['longPress', '长按'], ['multiTap', '连击']] });
-    for (const [label, key, min, max, proOnly] of [['长按延时 · ms', 'longPress', 300, 1500, true], ['连击次数', 'tapCount', 2, 4, true], ['连击间隔 · ms', 'tapInterval', 150, 700, true], ['中心取消死区 · px', 'deadZone', 16, 60, false], ['外甩取消距离 · px', 'cancelDistance', 160, 500, false], ['子轮盘悬停 · ms', 'submenuDelay', 200, 1500, true]]) trigger(touchCard, label, key, { min, max, proOnly });
+    trigger(mouseCard, '鼠标作用区域', 'mouseScope', { choices: [['chat', '仅聊天区域'], ['page', '页面非交互区域']] });
+    const pcEditCard = card(devicePanels.pc, '编辑框中', '「快速编辑」等动作常在打开的编辑框里使用；鼠标手势与快捷键不会与选字冲突。');
+    trigger(pcEditCard, '在消息编辑框中可呼出', 'pcEditor', { hint: '仅酒馆的消息编辑框；呼出后焦点与光标保留，执行前交还编辑框。' });
+    trigger(pcEditCard, '在底部发送框中可呼出', 'pcComposer', { hint: '默认关闭，避免与发送框的右键菜单习惯冲突。', proOnly: true });
 
+    const touchCard = card(devicePanels.mobile, '触屏手势', '长按原地松手后也可点选；浏览器 pointercancel 会取消，不强行锁住页面。');
+    trigger(touchCard, '触屏触发', 'touchMode', { choices: [['off', '关闭'], ['longPress', '长按'], ['multiTap', '连击']] });
+    for (const [label, key, min, max, proOnly] of [['长按延时 · ms', 'longPress', 300, 1500, true], ['连击次数', 'tapCount', 2, 4, true], ['连击间隔 · ms', 'tapInterval', 150, 700, true]]) trigger(touchCard, label, key, { min, max, proOnly });
+    trigger(touchCard, '触屏作用区域', 'touchScope', { choices: [['chat', '仅聊天区域'], ['page', '页面非交互区域']] });
+    const touchEditCard = card(devicePanels.mobile, '编辑框中', '无法区分「长按选字」与「长按呼出」，所以编辑框内改用双指轻点。');
+    trigger(touchEditCard, '双指轻点呼出', 'touchTwoFinger', { hint: '两指同时轻触后抬起即打开，编辑框内外都可用，输入法不收起；选字只用单指，不冲突。双指拖动或缩放不会触发。' });
+    showDevice(coarse ? 'mobile' : 'pc');
     const appearancePage = page('appearance', '外观与形态', '分区圆环、中心核与选中高亮统一预览。一二级轮盘可以同步，也可以拥有独立风格。');
     const appearanceLayout = element('div', 'stcj-config-layout'); appearancePage.append(appearanceLayout);
     const appearanceControls = element('div', 'stcj-config-controls'); appearanceLayout.append(appearanceControls); preview(appearanceLayout);

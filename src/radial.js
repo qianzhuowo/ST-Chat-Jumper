@@ -15,9 +15,24 @@ export function radialCenter(x, y, radius, width, height) {
 export function isRadialExcluded(target) {
   return !target?.closest || !!target.closest('input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="button"], [role="combobox"], [role="slider"], summary, iframe, audio, video, [draggable="true"], [role="dialog"], dialog, .popup, #stcj-root, #stcj-settings-window, #stcj-settings-panel, .stcj-favorites-modal');
 }
+// Message edit box (ST/TT share the frontend) and the bottom composer.
+export const EDITOR_SELECTOR = '#curEditTextarea';
+export const COMPOSER_SELECTOR = '#send_textarea';
+// kind: 'mouse' | 'key' use the PC profile, 'touch' the mobile profile. Mouse/keyboard gestures cannot be
+// confused with text selection, so the edit box may be opted in; a one-finger touch never is.
+export function radialTargetAllowed(target, config, kind) {
+  if (!config.enabled || !target?.closest) return false;
+  if (kind !== 'touch') {
+    if (config.pcEditor && target.closest(EDITOR_SELECTOR)) return true;
+    if (config.pcComposer && target.closest(COMPOSER_SELECTOR)) return true;
+  }
+  if (isRadialExcluded(target)) return false;
+  if (kind === 'key') return true;
+  return (kind === 'touch' ? config.touchScope : config.mouseScope) === 'page' || !!target.closest('#chat');
+}
 export function createFeature({ dependencies }) {
   let detach = null, pending = null, active = null, holdTimer = null, submenuTimer = null;
-  let taps = null, consumed = null, lastPoint = null, previousFocus = null;
+  let taps = null, consumed = null, lastPoint = null, previousFocus = null, duo = null;
   const clearHold = () => { clearTimeout(holdTimer); holdTimer = null; };
   const clearSubmenu = () => { clearTimeout(submenuTimer); submenuTimer = null; };
   function cancelRadial() {
@@ -27,9 +42,6 @@ export function createFeature({ dependencies }) {
       if (previousFocus?.isConnected) previousFocus.focus?.({ preventScroll: true });
       previousFocus = null;
     }
-  }
-  function available(target, config) {
-    return config.enabled && !isRadialExcluded(target) && (config.scope === 'page' || !!target.closest('#chat'));
   }
   function menuById(id) { return active?.config.menus.find(m => m.id === id); }
   function computeWheelMetrics(config, menu, origin, activeSubmenu = null) {
@@ -149,7 +161,8 @@ export function createFeature({ dependencies }) {
     cancelRadial();
     void dependencies.executeShortcutAction(item.action);
   }
-  function openRadial(x = innerWidth / 2, y = innerHeight / 2, pointerId = null, touch = false) {
+  // keepFocus: opened from an on-screen button while typing; leave focus (and the soft keyboard) in the editor.
+  function openRadial(x = innerWidth / 2, y = innerHeight / 2, pointerId = null, touch = false, { keepFocus = false } = {}) {
     cancelRadial();
     const config = dependencies.getRadialConfig(); if (!config.enabled) return false;
     const menu = config.menus.find(m => m.id === 'main');
@@ -176,7 +189,7 @@ export function createFeature({ dependencies }) {
       focusTier: 'main',
     };
     overlay.addEventListener('click', e => { if (e.target === overlay) cancelRadial(); });
-    document.body.append(overlay); render(); overlay.focus({ preventScroll: true });
+    document.body.append(overlay); render(); if (!keepFocus) overlay.focus({ preventScroll: true });
     // Custom icons come from the separate user icon file; re-render once it arrives.
     if (dependencies.loadIconLibrary && !dependencies.iconLibraryStatus?.().loaded) { const opened = active; void dependencies.loadIconLibrary().then(() => { if (active === opened) render(); }); }
     return true;
@@ -308,13 +321,20 @@ export function createFeature({ dependencies }) {
     const markConsumed = (x, y) => { consumed = { x, y, until: Date.now() + 400 }; };
     on(document, 'pointerdown', e => {
       consumed = null;
+      // Two-finger tap candidate: system text selection only ever uses one finger.
+      if (e.pointerType === 'touch') {
+        const now = Date.now();
+        if (e.isPrimary) duo = { first: { id: e.pointerId, x: e.clientX, y: e.clientY, target: e.target }, time: now, second: null, ups: 0 };
+        else if (duo && !duo.second && now - duo.time < 250) duo.second = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        else duo = null;
+      }
       if (active) {
         if (active.pointerId != null && e.pointerId !== active.pointerId) cancelRadial();
         return;
       }
       const c = dependencies.getRadialConfig();
-      if (!available(e.target, c) || e.isPrimary === false) { cancelRadial(); taps = null; return; }
       const touch = e.pointerType === 'touch';
+      if (!radialTargetAllowed(e.target, c, touch ? 'touch' : 'mouse') || e.isPrimary === false) { cancelRadial(); taps = null; return; }
       if (touch ? c.touchMode === 'off' : !c.mouseEnabled || e.button !== c.mouseButton || !modifier(e, c.modifier)) return;
       cancelRadial();
       pending = { id: e.pointerId, x: e.clientX, y: e.clientY, touch, time: Date.now(), config: c };
@@ -325,6 +345,7 @@ export function createFeature({ dependencies }) {
     }, true);
     on(document, 'pointermove', e => {
       lastPoint = { x: e.clientX, y: e.clientY };
+      if (duo) { const d = duo.first.id === e.pointerId ? duo.first : duo.second?.id === e.pointerId ? duo.second : null; if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10) duo = null; }
       if (pending && e.pointerId === pending.id) {
         const p = pending;
         if (Math.hypot(e.clientX - p.x, e.clientY - p.y) >= (p.touch ? 10 : p.config.threshold)) {
@@ -339,6 +360,15 @@ export function createFeature({ dependencies }) {
       }
     }, { capture: true, passive: false });
     on(document, 'pointerup', e => {
+      if (duo?.second && !active && (e.pointerId === duo.first.id || e.pointerId === duo.second.id) && ++duo.ups === 2) {
+        const d = duo; duo = null; const c = dependencies.getRadialConfig();
+        const allowed = c.enabled && c.touchTwoFinger && (d.first.target.closest?.(EDITOR_SELECTOR) || radialTargetAllowed(d.first.target, c, 'touch'));
+        if (allowed && Date.now() - d.time < 400) {
+          const x = (d.first.x + d.second.x) / 2, y = (d.first.y + d.second.y) / 2;
+          if (e.cancelable) e.preventDefault();
+          openRadial(x, y, null, true, { keepFocus: true }); markConsumed(x, y); return;
+        }
+      }
       if (pending?.id === e.pointerId) {
         const p = pending; clearHold(); pending = null;
         if (p.touch && p.config.touchMode === 'multiTap' && Date.now() - p.time < p.config.tapInterval) {
@@ -410,11 +440,11 @@ export function createFeature({ dependencies }) {
         return;
       }
       const c = dependencies.getRadialConfig();
-      if (!e.repeat && c.keyboardEnabled && available(e.target, { ...c, scope: 'page' }) && e.key.toLowerCase() === c.key && modifier(e, c.keyModifier)) {
+      if (!e.repeat && c.keyboardEnabled && radialTargetAllowed(e.target, c, 'key') && e.key.toLowerCase() === c.key && modifier(e, c.keyModifier)) {
         e.preventDefault(); openRadial(lastPoint?.x, lastPoint?.y);
       }
     }, true);
-    for (const type of ['pointercancel', 'dragstart']) on(document, type, () => { taps = null; cancelRadial(); }, true);
+    for (const type of ['pointercancel', 'dragstart']) on(document, type, () => { taps = null; duo = null; cancelRadial(); }, true);
     on(document, 'scroll', () => { taps = null; cancelRadial(); }, true);
     on(document, 'visibilitychange', () => { if (document.hidden) cancelRadial(); });
     on(window, 'blur', cancelRadial); on(window, 'resize', cancelRadial);

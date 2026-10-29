@@ -41,7 +41,9 @@ const empty = () => ({ label: '未设置', showLabel: false, showIcon: true });
 export function defaultRadialConfig() {
   return {
     version: RADIAL_CONFIG_VERSION, panelTheme: 'host', appearance: defaultRadialAppearance(), schemes: [], enabled: false, mouseEnabled: false, mouseButton: 2, modifier: 'alt',
-    keyboardEnabled: true, key: 'j', keyModifier: 'altShift', touchMode: 'off', scope: 'chat',
+    keyboardEnabled: true, key: 'j', keyModifier: 'altShift', touchMode: 'off',
+    // PC (mouse/keyboard) and mobile (touch) trigger profiles; each input event uses its own side.
+    mouseScope: 'chat', touchScope: 'chat', pcEditor: true, pcComposer: false, touchTwoFinger: true,
     threshold: 24, longPress: 550, tapCount: 2, tapInterval: 320, radius: 120,
     deadZone: 28, cancelDistance: 240, submenuDelay: 400,
     menus: [{ id: 'main', label: '主轮盘', items: [slot('prev', '上一楼'), empty(), slot('recent1', '最新楼'), empty(), slot('next', '下一楼'), empty(), slot('quickEdit', '编辑'), empty()] }],
@@ -51,10 +53,12 @@ export function normalizeRadialConfig(raw) {
   const d = defaultRadialConfig();
   const r = raw && typeof raw === 'object' ? raw : {};
   const result = { ...d, appearance: normalizeRadialAppearance(r.appearance) };
-  for (const key of ['enabled', 'mouseEnabled', 'keyboardEnabled']) result[key] = bool(r[key], d[key]);
-  for (const [key, values] of Object.entries({ panelTheme: ['host', 'light', 'dark'], modifier: ['alt', 'ctrl', 'shift', 'none'], keyModifier: ['alt', 'ctrl', 'shift', 'altShift', 'ctrlShift'], touchMode: ['off', 'longPress', 'multiTap'], scope: ['chat', 'page'] })) {
+  for (const key of ['enabled', 'mouseEnabled', 'keyboardEnabled', 'pcEditor', 'pcComposer', 'touchTwoFinger']) result[key] = bool(r[key], d[key]);
+  for (const [key, values] of Object.entries({ panelTheme: ['host', 'light', 'dark'], modifier: ['alt', 'ctrl', 'shift', 'none'], keyModifier: ['alt', 'ctrl', 'shift', 'altShift', 'ctrlShift'], touchMode: ['off', 'longPress', 'multiTap'] })) {
     result[key] = values.includes(r[key]) ? r[key] : d[key];
   }
+  // Former shared `scope` seeds both sides once (no version bump: a version change resets the whole wheel).
+  for (const key of ['mouseScope', 'touchScope']) result[key] = ['chat', 'page'].includes(r[key]) ? r[key] : ['chat', 'page'].includes(r.scope) ? r.scope : d[key];
   result.mouseButton = [1, 2, 3, 4].includes(r.mouseButton) ? r.mouseButton : d.mouseButton;
   result.key = typeof r.key === 'string' && /^[a-z0-9]$/i.test(r.key) ? r.key.toLowerCase() : d.key;
   for (const [key, min, max] of [['threshold', 8, 100], ['longPress', 300, 1500], ['tapCount', 2, 4], ['tapInterval', 150, 700], ['radius', 80, 200], ['deadZone', 16, 60], ['cancelDistance', 160, 500], ['submenuDelay', 200, 1500]]) result[key] = number(r[key], d[key], min, max);

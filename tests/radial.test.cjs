@@ -82,7 +82,10 @@ class Element extends Target {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 const chatTarget = { closest: selector => selector === '#chat' ? chatTarget : null };
-const inputTarget = { closest: selector => selector === '#chat' ? chatTarget : inputTarget };
+// A generic text input: excluded, and neither the message edit box nor the composer.
+const inputTarget = { closest: selector => selector === '#chat' ? chatTarget : selector === '#curEditTextarea' || selector === '#send_textarea' ? null : inputTarget };
+// The host message edit box (#curEditTextarea inside #chat).
+const editorTarget = { closest: selector => selector === '#chat' ? chatTarget : selector === '#send_textarea' ? null : editorTarget };
 // Explicit 6-cell fixture with a favorites child group. Gesture/editor tests use it so
 // they do not depend on the shipped default layout (covered by its own tests).
 const fixtureSlot = (id, label) => ({ label, showLabel: true, action: { type: 'plugin', id } });
@@ -171,6 +174,41 @@ test('input exclusion, center/outer/Escape/scroll/blur/cancel cleanup never exec
   r.services.openRadial(); d.emit('keydown', { key: 'Escape' }); assert.equal(r.opened(), false);
   r.services.openRadial(); r.window.emit('blur'); assert.equal(r.opened(), false); assert.equal(r.executed.length, 0);
   r.services.installRadialGestures(); r.services.destroyRadial(); assert.equal(d.count(), 0); assert.equal(r.window.count(), 0);
+});
+test('PC mouse and keyboard may open inside the message edit box; one-finger touch never does', async () => {
+  const r = runtime({ mouseEnabled: true, touchMode: 'longPress', longPress: 300 }); const d = r.document;
+  d.emit('pointerdown', { target: editorTarget }); d.emit('pointermove', { target: editorTarget, clientY: 200 }); assert.equal(r.opened(), true, 'mouse gesture in edit box');
+  r.services.cancelRadial();
+  d.emit('keydown', { key: 'j', altKey: true, shiftKey: true, target: editorTarget }); assert.equal(r.opened(), true, 'shortcut in edit box');
+  r.services.cancelRadial();
+  d.emit('pointerdown', { target: editorTarget, pointerType: 'touch', button: 0 }); await new Promise(resolve => setTimeout(resolve, 320));
+  assert.equal(r.opened(), false, 'long press in edit box stays text selection');
+  r.config.pcEditor = false;
+  d.emit('pointerdown', { target: editorTarget }); d.emit('pointermove', { target: editorTarget, clientY: 200 }); assert.equal(r.opened(), false, 'opt-out respected');
+  r.services.destroyRadial();
+});
+test('two-finger tap opens only when enabled, never on a two-finger drag', () => {
+  const r = runtime({ touchMode: 'off' }); const d = r.document;
+  const tap = (moved = false) => {
+    d.emit('pointerdown', { target: editorTarget, pointerType: 'touch', pointerId: 1, isPrimary: true, clientX: 100, clientY: 100 });
+    d.emit('pointerdown', { target: editorTarget, pointerType: 'touch', pointerId: 2, isPrimary: false, clientX: 160, clientY: 100 });
+    if (moved) d.emit('pointermove', { pointerType: 'touch', pointerId: 2, clientX: 160, clientY: 160 });
+    d.emit('pointerup', { pointerType: 'touch', pointerId: 2, clientX: 160, clientY: 100 });
+    d.emit('pointerup', { pointerType: 'touch', pointerId: 1, clientX: 100, clientY: 100 });
+  };
+  r.config.touchTwoFinger = false; tap(); assert.equal(r.opened(), false, 'opt-out respected');
+  r.config.touchTwoFinger = true;
+  tap(true); assert.equal(r.opened(), false, 'pinch/drag is not a tap');
+  tap(); assert.equal(r.opened(), true, 'two-finger tap opens');
+  assert.equal(r.executed.length, 0); r.services.destroyRadial();
+});
+test('legacy shared scope seeds both PC and mobile areas', () => {
+  const c = configModule.normalizeRadialConfig({ scope: 'page' });
+  assert.equal(c.mouseScope, 'page'); assert.equal(c.touchScope, 'page');
+  const s = configModule.normalizeRadialConfig({ scope: 'page', touchScope: 'chat' });
+  assert.equal(s.mouseScope, 'page'); assert.equal(s.touchScope, 'chat');
+  const d = configModule.normalizeRadialConfig({});
+  assert.deepEqual([d.pcEditor, d.pcComposer, d.touchTwoFinger], [true, false, true]);
 });
 test('keyboard invocation ignores text inputs, supports click-mode selection and cancellation', () => {
   const r = runtime(); r.document.emit('keydown', { key: 'j', target: inputTarget }); assert.equal(r.opened(), false);
