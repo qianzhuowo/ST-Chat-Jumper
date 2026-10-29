@@ -88,6 +88,13 @@ export function normalizeRadialConfig(raw) {
   result.menus = result.menus.slice(0, 17);
   const main = result.menus.find(m => m.id === 'main');
   if (main.appearance) { result.appearance = main.appearance; main.appearance = null; }
+  // A child group without any sector is not a secondary ring: drop it together with every reference,
+  // so a parent never keeps the "has secondary" marker after its last child was deleted.
+  const emptyChildren = new Set(result.menus.filter(m => m.id !== 'main' && !m.items.length).map(m => m.id));
+  if (emptyChildren.size) {
+    result.menus = result.menus.filter(m => !emptyChildren.has(m.id));
+    for (const m of result.menus) for (const i of m.items) if (emptyChildren.has(i.submenu)) delete i.submenu;
+  }
   // Exactly two levels: child menus cannot recurse or invoke other menus.
   for (const m of result.menus) for (const i of m.items) if (i.submenu && (m.id !== 'main' || i.submenu === 'main' || !result.menus.some(child => child.id === i.submenu))) delete i.submenu;
   const schemes = Array.isArray(r.schemes) ? r.schemes.slice(0, 8) : [];

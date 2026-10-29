@@ -1,13 +1,14 @@
-import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, resizePrimary, swapSlots, affectedByShrink } from './radial-editor.js';
+import { PRIMARY_COUNTS, selectedChild, archivedChildren, ownChild, addChild, removeChild, resizePrimary, swapSlots, affectedByShrink } from './radial-editor.js';
 import { bindCanvasSwap } from './radial-canvas-edit.js';
 import { resolveWheelAppearance, createSectorIcon } from './radial-view.js';
 import { defaultRadialAppearance, normalizeRadialAppearance, normalizeRadialConfig, RADIAL_CONFIG_VERSION, RADIAL_THEMES } from './radial-config.js';
 import { ACTION_TYPES, actionTypeOf, actionTypeLabel } from './action-catalog.js';
 import { getUserIcons, iconLabel, normalizeUserIcon } from './icon-library.js';
-import { iconUsage, migrateInlinePaths, newIconId } from './icon-store.js';
+import { iconUsage, migrateInlinePaths, newIconId, stripIconFromLibrary } from './icon-store.js';
+import { SCHEME_LIMIT, newSchemeId, readSchemeImport, mergeSchemeLibrary, schemeExport } from './scheme-store.js';
 import { openIconPicker } from './icon-picker.js';
 
-export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode', 'loadIconLibrary', 'saveIconLibrary', 'onIconLibraryChange', 'iconLibraryStatus'];
+export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode', 'loadIconLibrary', 'saveIconLibrary', 'onIconLibraryChange', 'iconLibraryStatus', 'loadSchemeLibrary', 'saveSchemeLibrary', 'getSchemeLibrary', 'onSchemeLibraryChange', 'schemeLibraryStatus'];
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
@@ -75,9 +76,20 @@ export function createFeature({ dependencies }) {
       historyStack.push({ menus: copy(config.menus), appearance: copy(config.appearance), radius: config.radius, menuId, slotIndex, subMenuId, subSlotIndex, reason: next.reason });
       applyHistoryEntry(next, `已重做：${next.reason || '修改'}`);
     }
+    // Live sliders fire many saves per frame; the canvas previews (full view rebuilds) are coalesced
+    // to at most one per animation frame. Persistence stays synchronous so callers read normalized values.
+    // Leading edge renders at once (discrete edits stay synchronous); further saves within the same
+    // frame mark the preview dirty and are rendered once on the trailing edge.
+    let previewFrame = 0, previewDirty = false;
+    function schedulePreviews() {
+      if (previewFrame) { previewDirty = true; return; }
+      renderPreviews();
+      const raf = window.requestAnimationFrame?.bind(window);
+      if (raf) previewFrame = raf(() => { previewFrame = 0; if (previewDirty) { previewDirty = false; schedulePreviews(); } });
+    }
     function save(message) {
       dependencies.cancelRadial(); dependencies.saveRadialConfig(config);
-      status.textContent = message || '已保存 · 预览不会执行动作'; renderPreviews();
+      status.textContent = message || '已保存 · 预览不会执行动作'; schedulePreviews();
     }
     function page(id, title, subtitle) {
       const section = element('section', 'stcj-settings-page'); section.dataset.stcjPage = id; section.hidden = true; section.id = `stcj-page-${id}`;
@@ -139,7 +151,7 @@ export function createFeature({ dependencies }) {
       // One compact entry: the button itself shows the current icon.
       const open = button(control, '', () => openIconPicker({
         host: dialog || container, current: item.iconId || '', appearance: a, followLabel,
-        iconUsage: id => iconUsage(config, id), saveIcons: list => dependencies.saveIconLibrary(list),
+        iconUsage: id => iconUsage(config, id, dependencies.getSchemeLibrary()), saveIcons: list => dependencies.saveIconLibrary(list),
         onApply: id => { if (id !== (item.iconId || '') || item.iconPath) onPick(id); },
         onIconDeleted: id => clearIconRefs(id),
       }), 'stcj-mini-btn stcj-icon-pick-btn');
@@ -150,6 +162,8 @@ export function createFeature({ dependencies }) {
       row.append(control); parent.append(row); return open;
     }
     function clearIconRefs(id) {
+      const library = dependencies.getSchemeLibrary();
+      if (stripIconFromLibrary(library, id)) dependencies.saveSchemeLibrary(library).catch(error => { status.textContent = `方案中的图标引用未清理：${error.message || error}`; });
       if (!iconUsage(config, id)) { renderEditor(); renderPreviews(); return; }
       change('删除自定义图标', () => {
         const each = menus => { for (const m of menus || []) for (const i of m.items || []) if (i.iconId === id) delete i.iconId; };
@@ -457,7 +471,7 @@ export function createFeature({ dependencies }) {
       const tools = element('div', 'stcj-editor-tools'); inspector.append(tools);
       button(tools, '📋 复制动作', () => { clipboardSlot = copy(item); renderEditor(); });
       button(tools, '📥 粘贴动作', () => mutateSelected('粘贴动作', selected => { const next = copy(clipboardSlot); delete next.submenu; const linked = selected.submenu; Object.keys(selected).forEach(k => delete selected[k]); Object.assign(selected, next); if (linked) selected.submenu = linked; })).disabled = !clipboardSlot;
-      if (isSub) button(tools, '删除此子动作', () => change('删除子动作', () => { const owned = ownChild(config, slotIndex); owned.items.splice(subSlotIndex, 1); subSlotIndex = -1; menuId = 'main'; }));
+      if (isSub) button(tools, '删除此子动作', () => change('删除子动作', () => { const left = removeChild(config, slotIndex, subSlotIndex); subSlotIndex = -1; menuId = 'main'; if (!left) subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; }));
       else button(tools, item.submenu ? '清空父格自身动作' : '清空当前动作', () => mutateSelected('清空当前动作', selected => { delete selected.action; delete selected.iconId; delete selected.iconPath; if (!selected.submenu) { selected.label = '未设置'; selected.showLabel = false; } })).disabled = !!item.submenu && !item.action;
       const children = card(editor, '当前格子的二级动作'); children.dataset.inlineSubwheel = 'true';
       if (sub) children.append(element('p', 'stcj-settings-note', `${sub.items.length} 个子动作；点击画布外侧格子编辑。${mainMenu().items.filter(i => i.submenu === sub.id).length > 1 ? '旧配置共享组：编辑时自动复制，仅影响当前父格。' : ''}`));
@@ -473,31 +487,88 @@ export function createFeature({ dependencies }) {
       }
     }
 
-    const schemePage = page('schemes', '方案与备份', '保存内容和外观组合。应用方案不改变手势开关；导入默认也保留当前安全触发设置。');
-    const schemes = card(schemePage, '自定义方案', '最多 8 套，包含所有一二级动作、名称显示、外观和基础尺寸。');
-    let schemeName = '我的轮盘'; field(schemes, '方案名称', { value: schemeName, onChange: v => { schemeName = v || '我的轮盘'; } });
-    const schemeList = element('div', 'stcj-scheme-list'); schemes.append(schemeList);
-    const addScheme = button(schemes, '保存当前配置为新方案', () => { if (config.schemes.length >= 8) return; let n = 1; while (config.schemes.some(s => s.id === `scheme-${n}`)) n++; config.schemes.push({ id: `scheme-${n}`, label: schemeName, menus: copy(config.menus), appearance: copy(config.appearance), radius: config.radius }); save('已保存命名方案'); renderSchemes(); });
-    function renderSchemes() {
-      schemeList.replaceChildren(); addScheme.disabled = config.schemes.length >= 8;
-      if (!config.schemes.length) schemeList.append(element('p', 'stcj-settings-note', '还没有保存的方案。先调整扇区和外观，再保存到这里。'));
-      config.schemes.forEach(scheme => {
-        const row = element('div', 'stcj-scheme-row'); row.append(element('strong', '', scheme.label), element('small', '', `${scheme.menus.length} 个轮盘 · ${scheme.radius}px`));
-        button(row, '应用', () => { recordSnapshot(`应用方案：${scheme.label}`); config.menus = copy(scheme.menus); undo.clear(); config.appearance = copy(scheme.appearance); config.radius = scheme.radius; config.cancelDistance = Math.max(config.cancelDistance, config.radius + 40); menuId = 'main'; subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; slotIndex = 0; subSlotIndex = 0; save('已应用方案，触发开关保持不变'); renderEditor(); renderAppearance(); });
-        button(row, '删除', () => { config.schemes = config.schemes.filter(s => s.id !== scheme.id); save(); renderSchemes(); });
-        schemeList.append(row);
-      });
+    const schemePage = page('schemes', '方案与备份', '动作和外观分开保存、分开应用。方案存放在酒馆用户目录 user/files/stcj-radial-schemes.json，随 ST / TT 数据一起备份，不占用 settings.json。');
+    // Two independent kinds of saved schemes, both kept in the scheme library file.
+    const schemeKinds = {
+      actions: { title: '动作方案', save: '保存当前扇区为动作方案', empty: '还没有动作方案。保存后可随时把全部一二级扇区换成这一套。', fallback: '我的动作',
+        describe: s => `${s.menus.length} 个轮盘 · ${s.menus.find(m => m.id === 'main')?.items.length || 0} 个主扇区`,
+        snapshot: name => ({ label: name, menus: copy(config.menus) }),
+        apply: s => { recordSnapshot(`应用动作方案：${s.label}`); config.menus = copy(s.menus); undo.clear(); menuId = 'main'; subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; slotIndex = 0; subSlotIndex = -1; save(`已应用动作方案「${s.label}」，外观与触发不变`); renderEditor(); } },
+      appearances: { title: '外观方案', save: '保存当前外观为外观方案', empty: '还没有外观方案。保存后可随时把配色、形态和尺寸换成这一套。', fallback: '我的外观',
+        describe: s => `${RADIAL_THEMES[s.appearance.theme]?.label || s.appearance.theme} · ${s.radius}px`,
+        snapshot: name => ({ label: name, appearance: copy(config.appearance), radius: config.radius }),
+        apply: s => { recordSnapshot(`应用外观方案：${s.label}`); config.appearance = copy(s.appearance); config.radius = s.radius; config.cancelDistance = Math.max(config.cancelDistance, config.radius + 40); save(`已应用外观方案「${s.label}」，扇区与触发不变`); renderAppearance(); } },
+    };
+    const schemeLists = {};
+    function updateLibrary(mutate, message) {
+      const library = dependencies.getSchemeLibrary(); mutate(library);
+      return dependencies.saveSchemeLibrary(library).then(() => { if (message) status.textContent = message; }, error => { status.textContent = `方案未保存：${error.message || error}`; });
     }
-    const backup = card(schemePage, '配置 JSON', '仅包含本插件轮盘配置，不包含聊天、API 或宿主设置。文本不会作为代码运行。');
+    for (const [kind, meta] of Object.entries(schemeKinds)) {
+      const box = card(schemePage, meta.title, `最多 ${SCHEME_LIMIT} 套。名称可直接在列表里修改。`);
+      let name = meta.fallback; const nameInput = field(box, '新方案名称', { value: name, onChange: v => { name = v || meta.fallback; } });
+      const list = element('div', 'stcj-scheme-list'); box.append(list);
+      const add = button(box, meta.save, () => updateLibrary(lib => { if (lib[kind].length < SCHEME_LIMIT) lib[kind].push({ id: newSchemeId(kind === 'actions' ? 'a' : 'p', lib[kind]), ...meta.snapshot(name) }); }, `已保存${meta.title}「${name}」`));
+      schemeLists[kind] = { list, add, nameInput };
+    }
+    function renderSchemes() {
+      const library = dependencies.getSchemeLibrary(), state = dependencies.schemeLibraryStatus();
+      for (const [kind, meta] of Object.entries(schemeKinds)) {
+        const { list, add } = schemeLists[kind], items = library[kind];
+        list.replaceChildren(); add.disabled = !state.loaded || items.length >= SCHEME_LIMIT;
+        if (!state.loaded) { list.append(element('p', 'stcj-settings-note', state.error ? `方案文件不可用：${state.error}` : '正在读取方案文件…')); continue; }
+        if (!items.length) list.append(element('p', 'stcj-settings-note', meta.empty));
+        for (const scheme of items) {
+          const row = element('div', 'stcj-scheme-row');
+          const title = element('input', 'stcj-scheme-name'); title.value = scheme.label; title.maxLength = 40; title.setAttribute('aria-label', `${meta.title}名称`);
+          title.addEventListener('change', () => { const v = title.value.trim().slice(0, 40); if (!v || v === scheme.label) { title.value = scheme.label; return; } updateLibrary(lib => { const s = lib[kind].find(x => x.id === scheme.id); if (s) s.label = v; }, '已重命名'); });
+          row.append(title, element('small', '', meta.describe(scheme)));
+          button(row, '应用', () => meta.apply(scheme));
+          button(row, '导出', () => exportSchemes({ actions: kind === 'actions' ? [scheme] : [], appearances: kind === 'appearances' ? [scheme] : [] }, `stcj-${kind === 'actions' ? 'action' : 'appearance'}-${scheme.label}`));
+          button(row, '删除', () => updateLibrary(lib => { lib[kind] = lib[kind].filter(s => s.id !== scheme.id); }, `已删除「${scheme.label}」`));
+          list.append(row);
+        }
+      }
+    }
+
+    const transfer = card(schemePage, '导入导出方案', '方案文件可在设备之间共享；导出时附带用到的自定义图标。导入只会追加，同名方案自动改名，不覆盖现有方案。');
+    const schemeJson = element('textarea', 'stcj-config-json'); schemeJson.rows = 6; schemeJson.spellcheck = false; schemeJson.setAttribute('aria-label', '方案 JSON'); schemeJson.placeholder = '导出的方案 JSON 会出现在这里；也可以粘贴后点「从文本导入」。';
+    const transferTools = element('div', 'stcj-editor-tools');
+    const filePicker = element('input'); filePicker.type = 'file'; filePicker.accept = '.json,application/json'; filePicker.hidden = true;
+    transfer.append(schemeJson, transferTools, filePicker);
+    // Bundle only the custom icons the exported data references, so exports stay self-contained.
+    function bundledIcons(raw) { const used = new Set(); visitIconRefs(raw, ref => { if (ref.get()?.startsWith('user:')) used.add(ref.get()); }); return getUserIcons().filter(i => used.has(`user:${i.id}`)); }
+    function exportSchemes(library, fileName) {
+      const data = schemeExport(library, []); data.icons = bundledIcons(data);
+      const text = JSON.stringify(data, null, 2); schemeJson.value = text;
+      try {
+        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+        const link = element('a'); link.href = url; link.download = `${fileName.replace(/[\\/:*?"<>|]+/g, '_')}.json`; document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        status.textContent = '已导出方案文件；JSON 同时显示在文本框中，可直接复制';
+      } catch { status.textContent = '已生成方案 JSON，请从文本框复制'; }
+    }
+    function importSchemes(text) {
+      try {
+        if (text.length > 2000000) throw new Error('文件超过 200 万字符上限');
+        const raw = JSON.parse(text);
+        const iconNote = mergeImportedIcons(raw);
+        const { library, added, skipped } = mergeSchemeLibrary(dependencies.getSchemeLibrary(), readSchemeImport(raw));
+        if (!added) throw new Error(skipped ? `方案已达 ${SCHEME_LIMIT} 套上限` : '文件中没有可导入的方案');
+        dependencies.saveSchemeLibrary(library).then(() => { status.textContent = `已导入 ${added} 套方案${skipped ? `，${skipped} 套因数量上限跳过` : ''}${iconNote}`; }, error => { status.textContent = `方案未保存：${error.message || error}`; });
+      } catch (error) { status.textContent = `未导入：${error.message}`; }
+    }
+    button(transferTools, '导出全部方案', () => exportSchemes(dependencies.getSchemeLibrary(), 'stcj-radial-schemes'));
+    button(transferTools, '从文件导入', () => filePicker.click());
+    button(transferTools, '从文本导入', () => importSchemes(schemeJson.value));
+    filePicker.addEventListener('change', async () => { const file = filePicker.files?.[0]; filePicker.value = ''; if (file) importSchemes(await file.text()); });
+
+    const backup = card(schemePage, '当前配置 JSON', '仅包含本插件当前轮盘配置（不含已保存方案），不包含聊天、API 或宿主设置。文本不会作为代码运行。');
     const json = element('textarea', 'stcj-config-json'); json.rows = 8; json.setAttribute('aria-label', '轮盘配置 JSON'); json.spellcheck = false; backup.append(json);
     const backupTools = element('div', 'stcj-editor-tools'); backup.append(backupTools);
     button(backupTools, '生成可复制 JSON', () => {
-      const out = normalizeRadialConfig(config);
-      // Bundle only the custom icons this configuration references, so backups stay self-contained.
-      const used = new Set(); const each = menus => { for (const m of menus || []) for (const i of m.items || []) if (i.iconId?.startsWith('user:')) used.add(i.iconId); };
-      each(out.menus); out.schemes.forEach(s => each(s.menus)); if (out.appearance.centerIconId?.startsWith('user:')) used.add(out.appearance.centerIconId);
-      const bundled = getUserIcons().filter(i => used.has(`user:${i.id}`));
-      if (bundled.length) out.customIcons = bundled;
+      const out = normalizeRadialConfig(config); delete out.schemes;
+      const bundled = bundledIcons(out); if (bundled.length) out.customIcons = bundled;
       json.value = JSON.stringify(out, null, 2); json.focus(); json.select();
     });
     let includeTriggers = false; field(backup, '导入时包含触发设置', { type: 'checkbox', value: false, hint: '默认保留现有启用状态、快捷键、鼠标和触屏设置。', onChange: v => { includeTriggers = v; } });
@@ -508,17 +579,34 @@ export function createFeature({ dependencies }) {
         if (!raw || !Array.isArray(raw.menus) || raw.version !== RADIAL_CONFIG_VERSION) throw new Error('仅支持 v4 轮盘配置；旧版本配置已停用');
         const iconNote = mergeImportedIcons(raw);
         const next = normalizeRadialConfig(raw);
-        for (const key of includeTriggers ? Object.keys(next) : ['menus', 'appearance', 'radius', 'schemes', 'panelTheme']) config[key] = next[key];
+        for (const key of includeTriggers ? Object.keys(next).filter(k => k !== 'schemes') : ['menus', 'appearance', 'radius', 'panelTheme']) config[key] = next[key];
         config.cancelDistance = Math.max(config.cancelDistance, config.radius + 40); undo.clear(); menuId = 'main';
         subMenuId = config.menus.find(m => m.id !== 'main')?.id || null; slotIndex = 0; subSlotIndex = 0;
         triggerFields.forEach(([input, key]) => { if (input.type === 'checkbox') input.checked = config[key]; else input.value = config[key]; });
-        syncPanelThemeUI(); save(`配置已校验并导入${iconNote}`); renderEditor(); renderAppearance(); renderSchemes();
+        syncPanelThemeUI(); save(`配置已校验并导入${iconNote}`); renderEditor(); renderAppearance();
+        // Old full backups may still carry combined schemes: they join the scheme library instead.
+        if (Array.isArray(raw.schemes) && raw.schemes.length) {
+          const { library, added } = mergeSchemeLibrary(dependencies.getSchemeLibrary(), readSchemeImport({ schemes: raw.schemes }));
+          if (added) dependencies.saveSchemeLibrary(library).then(() => { status.textContent = `配置已导入；旧备份中的方案已拆分加入方案库（${added} 套）`; }, () => {});
+        }
       } catch (error) { status.textContent = `未导入：${error.message}`; }
     });
-    // Merges bundled icons into the icon file; id clashes with different shapes are remapped in `raw`.
-    // Import itself stays synchronous; only the icon file write completes in the background.
+    // Every icon reference an import/export payload can carry: live menus, legacy combined schemes,
+    // action/appearance schemes and the centre icon.
+    function visitIconRefs(raw, visit) {
+      const item = i => { if (i && typeof i === 'object') visit({ get: () => i.iconId, set: v => { i.iconId = v; } }); };
+      const menus = list => { for (const m of Array.isArray(list) ? list : []) (Array.isArray(m?.items) ? m.items : []).forEach(item); };
+      const appearanceRef = a => { if (a && typeof a === 'object') visit({ get: () => a.centerIconId, set: v => { a.centerIconId = v; } }); };
+      menus(raw.menus); appearanceRef(raw.appearance);
+      for (const s of Array.isArray(raw.schemes) ? raw.schemes : []) { menus(s?.menus); appearanceRef(s?.appearance); }
+      for (const s of Array.isArray(raw.actions) ? raw.actions : []) menus(s?.menus);
+      for (const s of Array.isArray(raw.appearances) ? raw.appearances : []) appearanceRef(s?.appearance);
+    }
+    // Merges bundled icons (config backups: customIcons, scheme files: icons) into the icon file;
+    // id clashes with different shapes are remapped in `raw`. Only the icon file write is asynchronous.
     function mergeImportedIcons(raw) {
-      const incoming = (Array.isArray(raw.customIcons) ? raw.customIcons : []).map(normalizeUserIcon).filter(Boolean);
+      const source = Array.isArray(raw.customIcons) ? raw.customIcons : Array.isArray(raw.icons) ? raw.icons : [];
+      const incoming = source.map(normalizeUserIcon).filter(Boolean);
       if (!incoming.length) return '';
       const list = getUserIcons().slice(), remap = new Map(); let added = 0;
       for (const icon of incoming) {
@@ -528,15 +616,13 @@ export function createFeature({ dependencies }) {
         if (id !== icon.id) remap.set(`user:${icon.id}`, `user:${id}`);
         list.push({ ...icon, id }); added++;
       }
-      const fix = item => { if (item && remap.has(item.iconId)) item.iconId = remap.get(item.iconId); };
-      for (const m of raw.menus || []) (m.items || []).forEach(fix);
-      for (const s of raw.schemes || []) for (const m of s.menus || []) (m.items || []).forEach(fix);
-      if (raw.appearance && remap.has(raw.appearance.centerIconId)) raw.appearance.centerIconId = remap.get(raw.appearance.centerIconId);
+      visitIconRefs(raw, ref => { if (remap.has(ref.get())) ref.set(remap.get(ref.get())); });
       if (!added) return '';
-      dependencies.saveIconLibrary(list).then(() => { status.textContent = `配置已导入；已合并 ${added} 个自定义图标`; },
-        error => { status.textContent = `配置已导入；自定义图标未保存（${error.message || error}），对应格子暂用默认图标`; });
+      dependencies.saveIconLibrary(list).then(() => { status.textContent = `导入完成；已合并 ${added} 个自定义图标`; },
+        error => { status.textContent = `已导入；自定义图标未保存（${error.message || error}），对应格子暂用默认图标`; });
       return `；正在保存 ${added} 个自定义图标`;
-    }    const about = page('about', '关于与设计致谢', '独立浏览器实现 · 无构建依赖 · 与 SillyTavern / TauriTavern 共用服务架构。');
+    }
+    const about = page('about', '关于与设计致谢', '独立浏览器实现 · 无构建依赖 · 与 SillyTavern / TauriTavern 共用服务架构。');
     const credits = card(about, '设计参考与许可边界', '设置分区、交互画布和环形扇区设计参考 StarPie；入口信息卡的呈现参考 st-toolbox（Qianzhuo）。代码、几何渲染、样式和符号由本插件独立编写。');
     credits.append(element('p', '', 'StarPie © 2026 StarPie Contributors，维护者 SoftBlack42。参考版本 LICENSE 实为 “MIT License (with Non-Commercial Restriction)”，不是标准 MIT。本插件未复制或分发其代码、图片、声音、字体或商标图形，不将其许可表述为本插件许可。'));
     credits.append(element('p', '', 'st-toolbox 的参考副本使用 GPLv3；本插件保留原有 GPLv3 LICENSE。图标仅为系统字体呈现的文本符号与原创几何图形，没有新增第三方资源包。'));
@@ -546,11 +632,14 @@ export function createFeature({ dependencies }) {
     field(favorites, '收藏预览方式', { value: dependencies.loadFavoritesPreviewMode(), choices: [['swipe_default', '默认预览'], ['swipe_html', 'HTML 预览'], ['star_main', '主界面预览']], onChange: v => dependencies.saveFavoritesPreviewMode(v) });
     if (!status.parentNode) container.append(status);
     renderEditor(); renderAppearance(); renderSchemes(); renderPreviews();
-    const observer = window.ResizeObserver ? new ResizeObserver(renderPreviews) : null;
+    const observer = window.ResizeObserver ? new ResizeObserver(() => schedulePreviews()) : null;
     previews.forEach(p => observer?.observe(p.canvas));
     // Custom icons live in user/files/stcj-icon-library.json; load it, then move legacy inline paths there once.
     let mounted = true;
     const offIcons = dependencies.onIconLibraryChange?.(() => { if (mounted) { renderPreviews(); renderEditor(); } });
+    // Saved schemes live in user/files/stcj-radial-schemes.json; the first load also migrates legacy combined schemes.
+    const offSchemes = dependencies.onSchemeLibraryChange(() => { if (mounted) renderSchemes(); });
+    void dependencies.loadSchemeLibrary();
     void (dependencies.loadIconLibrary?.() || Promise.resolve()).then(async () => {
       if (!mounted) return;
       const state = dependencies.iconLibraryStatus?.() || { error: '' };
@@ -565,7 +654,7 @@ export function createFeature({ dependencies }) {
         save(`已把 ${moved} 个内嵌图标迁移到独立图标文件`); renderEditor();
       } catch (error) { status.textContent = `内嵌图标暂未迁移：${error.message || error}；原图标照常显示`; }
     });
-    detachObserver = () => { mounted = false; offIcons?.(); observer?.disconnect(); previews.forEach(p => p.dispose?.()); };
+    detachObserver = () => { mounted = false; if (previewFrame) window.cancelAnimationFrame?.(previewFrame); previewFrame = 0; offIcons?.(); offSchemes(); observer?.disconnect(); previews.forEach(p => p.dispose?.()); };
   }
   return { mountRadialSettings, destroyRadialSettings };
 }

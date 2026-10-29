@@ -92,10 +92,8 @@ export function createFeature({ dependencies }) {
       activeTier: 'main',
       onChoose: i => { if (a.pointerId == null) chooseMain(i); },
       onSubChoose: i => { if (a.pointerId == null) chooseSub(i); },
-      onCenter: () => {
-        if (a.submenu) closeSubmenu();
-        else cancelRadial();
-      },
+      // The centre always closes the whole wheel, also while a secondary ring is shown.
+      onCenter: () => cancelRadial(),
     });
     const ring = a.view.element;
     ring.style.left = a.center.x + 'px';
@@ -193,6 +191,17 @@ export function createFeature({ dependencies }) {
     // Custom icons come from the separate user icon file; re-render once it arrives.
     if (dependencies.loadIconLibrary && !dependencies.iconLibraryStatus?.().loaded) { const opened = active; void dependencies.loadIconLibrary().then(() => { if (active === opened) render(); }); }
     return true;
+  }
+  // Painted area: the primary ring with its centre, plus the visible secondary arc.
+  function onWheel(x, y) {
+    const a = active; if (!a) return false;
+    const distance = Math.hypot(x - a.center.x, y - a.center.y);
+    if (distance <= a.radius) return true;
+    if (!a.submenu) return false;
+    const bounds = a.view.subringBounds || resolveSubringBounds(a.radius, a.radius * a.appearance.innerRatio / 100, a.subAppearance, false);
+    if (distance < bounds.subInner || distance > bounds.subOuter) return false;
+    const arc = a.view.subArc;
+    return !arc || arcHitIndex(Math.atan2(y - a.center.y, x - a.center.x) * 180 / Math.PI, arc, a.submenu.items.length) >= 0;
   }
   function selectAt(x, y) {
     const a = active; if (!a) return;
@@ -330,6 +339,12 @@ export function createFeature({ dependencies }) {
       }
       if (active) {
         if (active.pointerId != null && e.pointerId !== active.pointerId) cancelRadial();
+        // Point-select mode: pressing anywhere outside the painted wheel closes it (mouse and touch alike);
+        // the press and its click are swallowed so nothing underneath is activated.
+        else if (active.pointerId == null && !onWheel(e.clientX, e.clientY)) {
+          cancelRadial(); markConsumed(e.clientX, e.clientY);
+          e.stopImmediatePropagation(); if (e.cancelable) e.preventDefault();
+        }
         return;
       }
       const c = dependencies.getRadialConfig();

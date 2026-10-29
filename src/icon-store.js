@@ -1,19 +1,12 @@
 import { normalizeUserIcon, sanitizeIconPath, setUserIcons, getUserIcons } from './icon-library.js';
+import { USER_FILE_URL, readUserJson, writeUserJson } from './user-file.js';
 
-// Custom icons are stored in their own user file instead of the shared settings.json:
-//   ST: data/<user>/user/files/stcj-icon-library.json   TT: <data_root>/default-user/user/files/...
-// Both hosts expose the same /api/files/upload + /user/files/ routes, and deleting the
-// extension folder never touches user files.
+// Custom icons live in their own user file (see user-file.js), not in the shared settings.json.
 export const ICON_FILE = 'stcj-icon-library.json';
-export const ICON_FILE_URL = `/user/files/${ICON_FILE}`;
+export const ICON_FILE_URL = USER_FILE_URL(ICON_FILE);
 export const ICON_LIBRARY_LIMIT = 200;
 export const requiredServices = [];
 
-const toBase64 = text => {
-  const bytes = new TextEncoder().encode(text);
-  let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
-};
 export function newIconId(existing) {
   const used = new Set(existing.map(i => i.id));
   let id; do id = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); while (used.has(id));
@@ -33,12 +26,22 @@ export function migrateInlinePaths(config, icons) {
   for (const scheme of config.schemes || []) for (const menu of scheme.menus || []) for (const item of menu.items || []) visit(item);
   return { icons: list, moved };
 }
-export function iconUsage(config, iconId) {
+// Counts references in the live config and, when given, the saved scheme library.
+export function iconUsage(config, iconId, library = null) {
   let count = 0;
   const each = menus => { for (const m of menus || []) for (const i of m.items || []) if (i.iconId === iconId) count++; };
   each(config.menus); for (const s of config.schemes || []) each(s.menus);
   if (config.appearance?.centerIconId === iconId) count++;
+  for (const s of library?.actions || []) each(s.menus);
+  for (const s of library?.appearances || []) if (s.appearance?.centerIconId === iconId) count++;
   return count;
+}
+// Removes one icon reference everywhere in a scheme library (in place); returns whether anything changed.
+export function stripIconFromLibrary(library, iconId) {
+  let changed = false;
+  for (const s of library.actions) for (const m of s.menus) for (const i of m.items) if (i.iconId === iconId) { delete i.iconId; changed = true; }
+  for (const s of library.appearances) if (s.appearance.centerIconId === iconId) { delete s.appearance.centerIconId; changed = true; }
+  return changed;
 }
 
 export function createFeature() {
@@ -50,13 +53,8 @@ export function createFeature() {
     if (loading && !force) return loading;
     loading = (async () => {
       try {
-        const response = await fetch(`${ICON_FILE_URL}?t=${Date.now()}`, { cache: 'no-store' });
-        if (response.status === 404) setUserIcons([]);
-        else if (!response.ok) throw new Error(`读取图标文件失败（HTTP ${response.status}）`);
-        else {
-          const data = await response.json();
-          setUserIcons(Array.isArray(data?.icons) ? data.icons : []);
-        }
+        const data = await readUserJson(ICON_FILE, '图标文件');
+        setUserIcons(Array.isArray(data?.icons) ? data.icons : []);
         loaded = true; lastError = '';
       } catch (error) { lastError = error.message || String(error); }
       finally { loading = null; notify(); }
@@ -66,11 +64,7 @@ export function createFeature() {
   }
   async function saveIconLibrary(icons) {
     const list = icons.map(normalizeUserIcon).filter(Boolean).slice(0, ICON_LIBRARY_LIMIT);
-    const body = JSON.stringify({ version: 1, icons: list }, null, 1);
-    const ctx = window.SillyTavern?.getContext?.();
-    const headers = { ...(ctx?.getRequestHeaders?.() || {}), 'Content-Type': 'application/json' };
-    const response = await fetch('/api/files/upload', { method: 'POST', headers, body: JSON.stringify({ name: ICON_FILE, data: toBase64(body) }) });
-    if (!response.ok) throw new Error(`保存图标文件失败（HTTP ${response.status}）`);
+    await writeUserJson(ICON_FILE, { version: 1, icons: list }, '图标文件');
     setUserIcons(list); loaded = true; lastError = ''; notify();
     return getUserIcons();
   }

@@ -19,13 +19,14 @@ import * as chatLifecycle from './chat-lifecycle.js';
 import * as settingsUI from './settings-ui.js';
 import * as lifecycle from './lifecycle.js';
 import * as radialConfig from './radial-config.js';
+import * as schemeStore from './scheme-store.js';
 import * as actionRegistry from './action-registry.js';
 import * as radialView from './radial-view.js';
 import * as radial from './radial.js';
 import * as radialSettings from './radial-settings.js';
 import { createState } from './state.js';
 
-const features = [radialConfig, iconStore, actionRegistry, radialView, radial, radialSettings, settings, icons, utilities, host, navigation, editing, selection, messageContent, range, actions, toolbar, favoritePreview, favoriteManager, favoriteStore, favoriteActions, favoritePanel, chatLifecycle, settingsUI, lifecycle];
+const features = [radialConfig, schemeStore, iconStore, actionRegistry, radialView, radial, radialSettings, settings, icons, utilities, host, navigation, editing, selection, messageContent, range, actions, toolbar, favoritePreview, favoriteManager, favoriteStore, favoriteActions, favoritePanel, chatLifecycle, settingsUI, lifecycle];
 
 /** Compose an isolated instance. Host imports are injected only at the entry point. */
 export function createApplication(hostImports) {

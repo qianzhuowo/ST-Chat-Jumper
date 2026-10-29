@@ -46,6 +46,15 @@ export function addChild(config, index, archiveId = null) {
   parent.submenu = child.id; delete parent.action;
   return child;
 }
+// Deletes one child sector. Deleting the last one also unlinks the parent and drops the empty group.
+export function removeChild(config, index, subIndex) {
+  const child = ownChild(config, index);
+  child.items.splice(subIndex, 1);
+  if (child.items.length) return child;
+  delete config.menus.find(m => m.id === 'main').items[index].submenu;
+  config.menus = config.menus.filter(m => m !== child);
+  return null;
+}
 export function resizePrimary(config, count) {
   if (!PRIMARY_COUNTS.includes(count)) throw new Error('仅支持 4、8、12 方位');
   const main = config.menus.find(m => m.id === 'main');

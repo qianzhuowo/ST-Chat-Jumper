@@ -202,6 +202,29 @@ test('two-finger tap opens only when enabled, never on a two-finger drag', () =>
   tap(); assert.equal(r.opened(), true, 'two-finger tap opens');
   assert.equal(r.executed.length, 0); r.services.destroyRadial();
 });
+test('deleting the last child sector removes the secondary marker at the source', async () => {
+  const editor = await import(require('node:url').pathToFileURL(require('node:path').join(__dirname, '..', 'src', 'radial-editor.js')).href);
+  const config = configModule.normalizeRadialConfig({ menus: [{ id: 'main', items: [{ label: 'P', submenu: 'child-1' }, { label: 'Q' }] }, { id: 'child-1', items: [{ label: 'a', action: { type: 'plugin', id: 'prev' } }, { label: 'b' }] }] });
+  assert.ok(editor.removeChild(config, 0, 0), 'one child left');
+  assert.equal(editor.removeChild(config, 0, 0), null);
+  assert.equal(config.menus[0].items[0].submenu, undefined); assert.equal(config.menus.length, 1);
+  // Old data with an empty child group loses the reference on load.
+  const old = configModule.normalizeRadialConfig({ menus: [{ id: 'main', items: [{ label: 'P', submenu: 'child-1' }] }, { id: 'child-1', items: [] }] });
+  assert.equal(old.menus[0].items[0].submenu, undefined); assert.equal(old.menus.length, 1);
+});
+test('centre closes the whole wheel even with a secondary ring open; pressing outside closes point-select mode', () => {
+  const r = runtime({ menus: [{ id: 'main', label: 'main', items: [{ label: 'child', submenu: 'child' }, { label: 'x', action: { type: 'plugin', id: 'prev' } }] }, { id: 'child', label: 'child', items: [{ label: 'next', action: { type: 'plugin', id: 'next' } }] }] });
+  r.services.openRadial(500, 350);
+  r.document.emit('keydown', { key: 'ArrowRight' }); assert.equal(r.opened(), true);
+  const center = r.document.body.querySelector?.('.stcj-radial-center');
+  if (center) { center.click?.(); assert.equal(r.opened(), false, 'one centre click closes everything'); }
+  r.services.openRadial(500, 350);
+  const down = r.document.emit('pointerdown', { clientX: 5, clientY: 5 });
+  assert.equal(r.opened(), false, 'press outside the wheel closes it'); assert.equal(down.defaultPrevented, true);
+  const click = r.document.emit('click', { clientX: 5, clientY: 5 }); assert.equal(click.defaultPrevented, true, 'the following click does not reach the page');
+  r.services.openRadial(500, 350); r.document.emit('pointerdown', { clientX: 500, clientY: 350 }); assert.equal(r.opened(), true, 'press on the wheel keeps it open');
+  assert.equal(r.executed.length, 0); r.services.destroyRadial();
+});
 test('legacy shared scope seeds both PC and mobile areas', () => {
   const c = configModule.normalizeRadialConfig({ scope: 'page' });
   assert.equal(c.mouseScope, 'page'); assert.equal(c.touchScope, 'page');
@@ -262,7 +285,7 @@ test('appearance validates colors and inherited palette names, and leaves label 
   assert.equal(a.surface, '#f6f8fb'); assert.equal(a.accent, '#123456'); assert.equal(a.gap, 16); assert.equal(a.rotation, -180); assert.equal('showIcons' in a, false); assert.equal('showLabels' in a, false); assert.equal(a.centerSymbol, '123');
 });
 test('imported main appearance becomes the single editable global appearance, while children remain independent', () => {
-  const config = configModule.normalizeRadialConfig({ appearance: { theme: 'graphite' }, menus: [{ id: 'main', appearance: { theme: 'porcelain' }, items: [] }, { id: 'child', appearance: { theme: 'forest' }, items: [] }] });
+  const config = configModule.normalizeRadialConfig({ appearance: { theme: 'graphite' }, menus: [{ id: 'main', appearance: { theme: 'porcelain' }, items: [] }, { id: 'child', appearance: { theme: 'forest' }, items: [{ label: 'c' }] }] });
   assert.equal(config.appearance.theme, 'porcelain'); assert.equal(config.menus[0].appearance, null); assert.equal(config.menus[1].appearance.theme, 'forest');
   config.appearance.surface = '#112233'; const main = viewModule.resolveWheelAppearance(config, config.menus[0], 120); const child = viewModule.resolveWheelAppearance(config, config.menus[1], 120);
   assert.equal(main.surface, '#112233'); assert.notEqual(child.surface, '#112233');
@@ -424,7 +447,7 @@ test('settings UI supports same-page primary/secondary free editing, co-screen p
       openRadial: () => r.services.openRadial(),
       createRadialView: opts => viewModule.createFeature().createRadialView(opts),
       loadFavoritesPreviewMode: () => 'swipe_default',
-      saveFavoritesPreviewMode: () => {},
+      getSchemeLibrary: () => ({ actions: [], appearances: [] }), saveSchemeLibrary: async () => {}, loadSchemeLibrary: async () => {}, onSchemeLibraryChange: () => () => {}, schemeLibraryStatus: () => ({ loaded: true, error: '', actions: 0, appearances: 0 }), saveFavoritesPreviewMode: () => {},
     },
   });
   settingsFeature.mountRadialSettings(mount);
@@ -544,7 +567,7 @@ function editorReviewFixture(overrides) {
   const feature = radialSettingsModule.createFeature({dependencies:{
     getRadialConfig:()=>saved,saveRadialConfig:next=>{saved=configModule.normalizeRadialConfig(next);writes++;},
     listShortcutActions:()=>[{type:'plugin',id:'prev',label:'prev'}],cancelRadial:()=>{},
-    createRadialView:opts=>viewModule.createFeature().createRadialView(opts),loadFavoritesPreviewMode:()=> 'swipe_default',saveFavoritesPreviewMode:()=>{}
+    createRadialView:opts=>viewModule.createFeature().createRadialView(opts),loadFavoritesPreviewMode:()=> 'swipe_default',getSchemeLibrary: () => ({ actions: [], appearances: [] }), saveSchemeLibrary: async () => {}, loadSchemeLibrary: async () => {}, onSchemeLibraryChange: () => () => {}, schemeLibraryStatus: () => ({ loaded: true, error: '', actions: 0, appearances: 0 }), saveFavoritesPreviewMode:()=>{}
   }});
   feature.mountRadialSettings(mount);
   const actions=mount.querySelector('[data-stcj-page=actions]');

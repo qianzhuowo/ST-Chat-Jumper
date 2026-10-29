@@ -223,6 +223,10 @@ export function createFeature({ state, dependencies }) {
 
     document.body.insertAdjacentHTML('beforeend', html);
     const dialog = document.getElementById('stcj-settings-window');
+    // The host closes unpinned drawers (e.g. the extensions panel) on any html mousedown/touchstart
+    // outside them. This dialog belongs to that panel, so its presses must not reach that handler.
+    // Plugin-wide pointer listeners run in the capture phase and are unaffected.
+    for (const type of ['mousedown', 'touchstart']) dialog.addEventListener(type, e => e.stopPropagation(), { passive: true });
     document.getElementById('stcj-settings-close').addEventListener('click', closeSettingsWindow);
     const sidebarToggle = document.getElementById('stcj-sidebar-toggle');
     sidebarToggle?.addEventListener('click', () => {
