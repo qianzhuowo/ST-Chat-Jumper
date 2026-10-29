@@ -215,7 +215,7 @@ export function createFeature({ dependencies }) {
       save(message); renderPreviews();
     }
     function preview(parent) {
-      const box = card(parent, '实时动作画布', '从北向开始顺时针。点击格子编辑；拖到任意另一格交换，子格也能和父格互换（只换内容，二级关联留在原方位）。Alt + 方向键在同一层交换；Esc 取消拖拽。预览绝不执行动作。');
+      const box = card(parent, '实时动作画布', '从北向开始顺时针。点击格子编辑；拖到任意另一格交换，子格也能和父格互换（只换内容，二级关联留在原方位）。Alt + 方向键在同一层交换；Esc 取消拖拽。预览时不会执行动作。');
       box.classList.add('stcj-preview-card');
       const canvasToolbar = element('div', 'stcj-canvas-toolbar');
       const zoomOutBtn = button(canvasToolbar, '−', () => { previewZoom = Math.max(75, previewZoom - 10); renderPreviews(); }, 'stcj-canvas-tool-btn'); zoomOutBtn.setAttribute('aria-label', '缩小预览');
@@ -510,7 +510,7 @@ export function createFeature({ dependencies }) {
       }
     }
 
-    const schemePage = page('schemes', '方案与备份', '动作和外观分开保存、分开应用。方案存放在酒馆用户目录 user/files/stcj-radial-schemes.json，随 ST / TT 数据一起备份，不占用 settings.json。');
+    const schemePage = page('schemes', '方案与备份', '动作和外观分开保存、分开应用。方案存放在酒馆用户目录 user/files/stcj-radial-schemes.json，随 ST / TT 数据一起备份。');
     // Two independent kinds of saved schemes, both kept in the scheme library file.
     const schemeKinds = {
       actions: { title: '动作方案', save: '保存当前扇区为动作方案', empty: '还没有动作方案。保存后可随时把全部一二级扇区换成这一套。', fallback: '我的动作',
@@ -646,9 +646,8 @@ export function createFeature({ dependencies }) {
       return `；正在保存 ${added} 个自定义图标`;
     }
     const about = page('about', '关于与设计致谢', '独立浏览器实现 · 无构建依赖 · 与 SillyTavern / TauriTavern 共用服务架构。');
-    const credits = card(about, '设计参考与许可边界', '设置分区、交互画布和环形扇区设计参考 StarPie；入口信息卡的呈现参考 st-toolbox（Qianzhuo）。代码、几何渲染、样式和符号由本插件独立编写。');
+    const credits = card(about, '设计参考与许可边界', '设置分区、交互画布和环形扇区设计参考 StarPie；代码、几何渲染、样式和符号由本插件独立编写。');
     credits.append(element('p', '', 'StarPie © 2026 StarPie Contributors，维护者 SoftBlack42。参考版本 LICENSE 实为 “MIT License (with Non-Commercial Restriction)”，不是标准 MIT。本插件未复制或分发其代码、图片、声音、字体或商标图形，不将其许可表述为本插件许可。'));
-    credits.append(element('p', '', 'st-toolbox 的参考副本使用 GPLv3；本插件保留原有 GPLv3 LICENSE。图标仅为系统字体呈现的文本符号与原创几何图形，没有新增第三方资源包。'));
     for (const [name, href] of [['StarPie 设计来源', 'https://github.com/SoftBlack42/StarPie'], ['本插件源码与许可证', 'https://github.com/qianzhuowo/ST-Chat-Jumper']]) { const link = element('a', '', name); link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer'; credits.append(link, document.createTextNode(' · ')); }
     card(about, '动作扩展', '目前仅内置插件动作。酒馆操作、角色卡及自定义命令保留注册接口，不提供虚假的未实现功能，也不执行配置中的任意脚本。');
     const favorites = card(about, '收藏预览兼容设置');

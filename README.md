@@ -1,17 +1,20 @@
 # ST Chat Jumper
 
-SillyTavern 悬浮跳转条插件，提供快捷楼层导航、快速编辑、翻页、楼层收藏等功能。
+SillyTavern 悬浮跳转条/轮盘插件，提供快捷楼层导航、快速编辑、翻页、楼层收藏等功能。
 > 已兼容TauriTavern（tt 酒馆）
 
 ## 功能
 
-- 功能展示:
-
-<video src="https://github.com/user-attachments/assets/995cf46b-9e9b-4d92-815d-0a801e7316b3.mp4" controls="controls" width="80%" loop></video>
-
-- 收藏功能展示:
-
-<video src="https://github.com/user-attachments/assets/7e1b8717-4724-4a39-9680-3911e2f417b8.mp4" controls="controls" width="80%" loop></video>
+<table>
+  <tr>
+    <th width="50%">悬浮条演示</th>
+    <th width="50%">轮盘演示</th>
+  </tr>
+  <tr>
+    <td align="center"><video src="https://github.com/user-attachments/assets/cbaae458-eca5-41bf-be4a-db9226465fe0" controls="controls" width="80%" loop></video></td>
+    <td align="center"><video src="https://github.com/user-attachments/assets/4c374c54-9fbb-429c-8e0e-16d4cd282108" controls="controls" width="80%" loop></video></td>
+  </tr>
+</table>
 
 - **快速跳转** — 最近 3 楼 / 快速翻页（左/右）/ 上一楼 / 下一楼（跳到头部）
 - **精确对齐** — 当前楼层头部 (H) / 尾部 (L) 对齐
@@ -24,7 +27,7 @@ SillyTavern 悬浮跳转条插件，提供快捷楼层导航、快速编辑、�
 - **手势快捷轮盘** — 可独立于悬浮条启用，支持鼠标修饰键 + 右键拖动、可配快捷键、触屏长按 / 连击
 - **悬浮可拖拽** — 长按悬浮条即可拖动到屏幕任意位置，支持横/竖布局切换
 
-## 按钮自定义（v1.5.0 新增）
+## 按钮自定义
 
 在 SillyTavern / TauriTavern 的 **扩展设置** 中，点击 **ST Chat Jumper 设置卡片**，所有设置在独立窗口编辑：
 - **勾选/取消** — 控制每个按钮的显示或隐藏
@@ -33,9 +36,9 @@ SillyTavern 悬浮跳转条插件，提供快捷楼层导航、快速编辑、�
 
 ## 手势轮盘
 
-默认关闭；开启后可用 `Alt+Shift+J` 呼出。鼠标需单独开启，默认 `Alt + 右键拖动`；未拖动的普通右键保留原生菜单。手机可选长按（原地松手后点选 / 滑选）或连击。轮盘与悬浮条可分别开启或同时使用。主轮盘及各二级轮盘的扇区、标签、顺序和动作均可编辑，输入/滚动优先，Esc 或外甩可取消。
+默认关闭；开启后可用 `Alt+Shift+J` 呼出。鼠标需单独开启，默认 `Alt + 右键拖动`；未拖动的普通右键保留原生菜单。手机可选长按（原地松手后点选 / 滑选）或连击。轮盘与悬浮条可分别开启或同时使用。主轮盘及各二级轮盘的扇区、标签、顺序和动作均可编辑。
 
-设置窗口提供触发、外观、动作、悬浮条、方案和关于六个分区（支持侧栏折叠、简单/高级模式切换与窄屏自适应）。在「扇区与动作」页支持**一二级轮盘同屏双环实时预览**与**同页自由编辑**；支持 4 套配色、3 种环形形态、命名方案和 JSON 备份。
+设置窗口提供触发、外观、动作、悬浮条、方案等自定义设置。
 
 ## 安装
 
