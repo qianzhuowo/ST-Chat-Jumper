@@ -45,6 +45,9 @@ playwright/.cache/
 *.temp
 *.swp
 *.swo
+*.bak
+*.orig
+*.rej
 *~
 .env
 .env.*
@@ -52,8 +55,13 @@ playwright/.cache/
 !.env.sample
 /.tmp/
 /tmp/
+/screenshots/
 /.vscode/
 /.idea/
+# Local AI-agent workspaces and caches.
+/.claude/
+/.codex/
+/.agents/
 .DS_Store
 Thumbs.db
 Desktop.ini

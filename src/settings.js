@@ -187,6 +187,19 @@ export function createFeature({ state, dependencies }) {
     }
   }
 
+  function getOutlinePageSize() {
+    const value = window.SillyTavern?.getContext?.()?.extensionSettings?.[constants.EXT_SETTINGS_KEY]?.outlinePageSize;
+    return constants.OUTLINE_PAGE_SIZES.includes(value) ? value : constants.DEFAULT_OUTLINE_PAGE_SIZE;
+  }
+
+  function saveOutlinePageSize(size) {
+    const ctx = window.SillyTavern?.getContext?.();
+    if (!ctx?.extensionSettings || !constants.OUTLINE_PAGE_SIZES.includes(size)) return;
+    ctx.extensionSettings[constants.EXT_SETTINGS_KEY] ??= {};
+    ctx.extensionSettings[constants.EXT_SETTINGS_KEY].outlinePageSize = size;
+    ctx.saveSettingsDebounced?.();
+  }
+
   function formatRangePagingModeLabel(mode = getRangePagingMode()) {
     return mode === 'shift' ? '平移' : '扩展';
   }
@@ -238,6 +251,7 @@ export function createFeature({ state, dependencies }) {
         favPanelCustom,
         favPanelW,
         favPanelH,
+        outlineSide: parsed.outlineSide === 'right' ? 'right' : 'left',
       };
     } catch {
       return { ...constants.DEFAULT_SETTINGS };
@@ -299,5 +313,5 @@ export function createFeature({ state, dependencies }) {
     }
   }
 
-  return { getButtonSettings, getDefaultButtonSettings, saveButtonSettings, getRangeStep, saveRangeStep, getRangeContext, saveRangeContext, getRangePagingMode, saveRangePagingMode, loadFavoritesPreviewMode, saveFavoritesPreviewMode, formatRangePagingModeLabel, isButtonEnabled, loadSettings, saveSettings, normalizeRootScale, getRootScalePercent, formatRootScalePercent, getRootScaleSliderProgress, loadGlobalHidden, saveGlobalHidden };
+  return { getButtonSettings, getDefaultButtonSettings, saveButtonSettings, getRangeStep, saveRangeStep, getRangeContext, saveRangeContext, getRangePagingMode, saveRangePagingMode, loadFavoritesPreviewMode, saveFavoritesPreviewMode, getOutlinePageSize, saveOutlinePageSize, formatRangePagingModeLabel, isButtonEnabled, loadSettings, saveSettings, normalizeRootScale, getRootScalePercent, formatRootScalePercent, getRootScaleSliderProgress, loadGlobalHidden, saveGlobalHidden };
 }

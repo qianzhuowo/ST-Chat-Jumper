@@ -1,5 +1,5 @@
 import * as constants from './constants.js';
-import { actionIconSvg } from './action-catalog.js';
+import { actionIconSvg, formatLiveFloor } from './action-catalog.js';
 
 // Explicit cross-feature service contract; linked once by application.js.
 export const requiredServices = [
@@ -22,6 +22,7 @@ export const requiredServices = [
   "handleAction",
   "installCleanup",
   "installRadialGestures",
+  "isButtonEnabled",
   "loadFavoritesPreviewMode",
   "loadGlobalHidden",
   "log",
@@ -39,7 +40,8 @@ export const requiredServices = [
   "triggerHapticFeedback",
   "updateFavoritesUI",
   "updateQuickEditButton",
-  "updateRangeButtons"
+  "updateRangeButtons",
+  "watchCurrentFloor"
 ];
 
 export function createFeature({ state, dependencies }) {
@@ -77,6 +79,37 @@ export function createFeature({ state, dependencies }) {
 
     dependencies.setIcon(btn, state.favorites.favPanelOpen ? 'chevronDown' : 'chevronRight');
     btn.title = state.favorites.favPanelOpen ? '收起最近收藏' : '展开最近收藏';
+  }
+
+  function updateOutlineToggleButton(open, root = document.getElementById(constants.ROOT_ID)) {
+    const btn = root?.querySelector('.stcj-btn[data-action="toggleOutline"]');
+    if (!btn) return;
+    btn.classList.toggle('stcj-active', !!open);
+    btn.title = open ? '收起楼层大纲' : '楼层大纲：按楼层浏览、跳转与原地预览';
+  }
+
+  function renderFloorIndicator(root, floor) {
+    const btn = root.querySelector('.stcj-btn[data-action="currentFloor"]');
+    const value = btn?.querySelector('.stcj-floor-value');
+    if (!value) return;
+    const text = formatLiveFloor(floor);
+    value.textContent = text;
+    btn.dataset.digits = String(Math.min(text.length, 5));
+    btn.title = Number.isInteger(floor?.id)
+      ? `当前第 ${floor.id} 楼（共 ${floor.total} 层，最新 #${floor.total - 1}）`
+      : '当前楼层：暂无消息';
+  }
+
+  // The live floor number subscribes to the shared watch only while its button is enabled.
+  function syncFloorIndicator() {
+    const root = document.getElementById(constants.ROOT_ID);
+    const enabled = !!root && dependencies.isButtonEnabled('currentFloor');
+    if (enabled && !state.layout.detachFloorIndicator) {
+      state.layout.detachFloorIndicator = dependencies.watchCurrentFloor(floor => renderFloorIndicator(root, floor));
+    } else if (!enabled && state.layout.detachFloorIndicator) {
+      state.layout.detachFloorIndicator();
+      state.layout.detachFloorIndicator = null;
+    }
   }
 
   function getRootMaxOffsets(root) {
@@ -438,6 +471,8 @@ export function createFeature({ state, dependencies }) {
     btns.forEach((btn) => {
       // 禁止长按/右键菜单
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
+      // 动作在 pointerup 执行；取消触屏随后合成的 click，否则它会落到刚打开、盖在手指下的面板上
+      btn.addEventListener('touchend', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
 
       btn.addEventListener('pointerup', async (e) => {
         // 如果刚刚拖拽，则不触发按钮动作
@@ -495,6 +530,8 @@ export function createFeature({ state, dependencies }) {
       <div class="stcj-btn" data-action="currentTail" title="当前楼层：对齐到尾部">${actionIconSvg('currentTail')}</div>
       <div class="stcj-btn" data-action="quickEdit" title="快速编辑：选中文字可高亮定位；无选中则编辑当前楼层">${actionIconSvg('quickEdit')}</div>
       <div class="stcj-btn" data-action="quickDelete" title="快速删除：选中某楼文字则删除该楼；无选中则删除最新楼层">${actionIconSvg('quickDelete')}</div>
+      <div class="stcj-btn stcj-floor-indicator" data-action="currentFloor" title="当前楼层"><span class="stcj-floor-mark" aria-hidden="true">#</span><span class="stcj-floor-value">—</span></div>
+      <div class="stcj-btn" data-action="toggleOutline" title="楼层大纲：按楼层浏览、跳转与原地预览">${actionIconSvg('toggleOutline')}</div>
 
       <div class="stcj-pin-group">
         <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${actionIconSvg('togglePin')}</div>
@@ -594,5 +631,5 @@ export function createFeature({ state, dependencies }) {
     dependencies.log('UI 已注入');
   }
 
-  return { updateOrientationToggleButton, updateCollapseToggleButton, updatePrevNextButtons, updateFavPanelToggleButton, getRootMaxOffsets, persistRootPosition, setRootPositionOnly, clampRootIntoViewport, applyRootPositionFromSettings, scheduleRepositionOnResize, syncScaleControls, applyRootScale, setRootScale, setOrientation, toggleOrientation, setCollapsed, toggleCollapse, toggleGlobalHide, attachDrag, bindButtons, buildUI };
+  return { updateOrientationToggleButton, updateCollapseToggleButton, updatePrevNextButtons, updateFavPanelToggleButton, updateOutlineToggleButton, syncFloorIndicator, getRootMaxOffsets, persistRootPosition, setRootPositionOnly, clampRootIntoViewport, applyRootPositionFromSettings, scheduleRepositionOnResize, syncScaleControls, applyRootScale, setRootScale, setOrientation, toggleOrientation, setCollapsed, toggleCollapse, toggleGlobalHide, attachDrag, bindButtons, buildUI };
 }

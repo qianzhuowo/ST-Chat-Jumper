@@ -16,7 +16,8 @@ export const requiredServices = [
   "showFloorRange",
   "toggleCollapse",
   "toggleOrientation",
-  "togglePinMode"
+  "togglePinMode",
+  "toggleOutline"
 ];
 
 export function createFeature({ state, dependencies }) {
@@ -87,6 +88,15 @@ export function createFeature({ state, dependencies }) {
         return dependencies.alignCurrentMessage('start');
       case 'currentTail':
         return dependencies.alignCurrentMessage('end');
+
+      // 当前楼层序号：只做展示，点击是空动作
+      case 'currentFloor':
+        return;
+
+      // 楼层大纲面板
+      case 'toggleOutline':
+        dependencies.toggleOutline();
+        return;
 
       // ✏️ 快速编辑（选中内容可高亮定位）
       case 'quickEdit':

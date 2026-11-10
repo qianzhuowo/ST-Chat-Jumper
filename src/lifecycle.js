@@ -5,6 +5,7 @@ export const requiredServices = [
   "buildUI",
   "destroyRadial",
   "destroyRadialSettings",
+  "destroyOutline",
   "closeSettingsWindow",
   "clearQuickEditState",
   "closeFavoritesManager",
@@ -15,7 +16,8 @@ export const requiredServices = [
   "getHostContext",
   "getHostEventTypes",
   "resetMessageVisibilityObservers",
-  "restoreHostStyles"
+  "restoreHostStyles",
+  "stopCurrentFloorWatch"
 ];
 
 export function createFeature({ state, dependencies }) {
@@ -78,6 +80,13 @@ export function createFeature({ state, dependencies }) {
       dependencies.destroyRadial();
       dependencies.destroyRadialSettings();
       dependencies.closeSettingsWindow();
+      try {
+        dependencies.destroyOutline();
+        dependencies.stopCurrentFloorWatch();
+        state.layout.detachFloorIndicator = null;
+      } catch {
+        /* ignore */
+      }
       try {
         window.removeEventListener('resize', onResize);
       } catch {

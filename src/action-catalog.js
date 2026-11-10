@@ -20,6 +20,10 @@ export const ACTION_CATALOG = Object.freeze([
   { id: 'resetRange', label: '恢复区间', icon: 'restore' },
   { id: 'currentHead', label: '对齐到头部', icon: 'head' },
   { id: 'currentTail', label: '对齐到尾部', icon: 'tail' },
+  // `live: 'floor'` marks an action whose button/cell shows the live current floor
+  // (navigation.watchCurrentFloor) instead of its icon; the icon is used in pickers.
+  { id: 'currentFloor', label: '当前楼层序号', icon: 'hash', live: 'floor' },
+  { id: 'toggleOutline', label: '楼层大纲', icon: 'outline' },
   { id: 'toggleCollapse', label: '收起/展开', icon: 'minus' },
   { id: 'toggleOrientation', label: '横/竖布局切换', icon: 'horizontal' },
   { id: 'togglePin', label: '点选收藏', icon: 'pin' },
@@ -48,6 +52,15 @@ export function actionTypeLabel(item) {
 
 const byId = new Map(ACTION_CATALOG.map(entry => [entry.id, entry]));
 export function findCatalogAction(id) { return byId.get(id) || null; }
+// Live display kind of a plugin action reference (or cell action), e.g. 'floor'; null otherwise.
+export function actionLiveKind(actionRef) {
+  if (!actionRef || (actionRef.type && actionRef.type !== 'plugin')) return null;
+  return byId.get(typeof actionRef === 'string' ? actionRef : actionRef.id)?.live || null;
+}
+// Text shown for a live floor value: the 0-based mesid like the host's own "#N".
+export function formatLiveFloor(floor) {
+  return Number.isInteger(floor?.id) ? String(floor.id) : '—';
+}
 // Returns only markup from the trusted ICONS table; never user-provided strings.
 export function iconSvg(icon) {
   const [name, arg] = Array.isArray(icon) ? icon : [icon];

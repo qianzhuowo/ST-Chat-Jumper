@@ -1,6 +1,6 @@
 import { resolveSubringBounds, resolveWheelAppearance, arcHitIndex } from './radial-view.js';
 import { normalizeRadialAppearance } from './radial-config.js';
-export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView', 'loadIconLibrary', 'iconLibraryStatus'];
+export const requiredServices = ['getRadialConfig', 'executeShortcutAction', 'createRadialView', 'loadIconLibrary', 'iconLibraryStatus', 'getCurrentFloor'];
 
 export function radialHitTest(x, y, center, count, deadZone, cancelDistance, rotation = 0) {
   const dx = x - center.x, dy = y - center.y;
@@ -94,6 +94,7 @@ export function createFeature({ dependencies }) {
       onSubChoose: i => { if (a.pointerId == null) chooseSub(i); },
       // The centre always closes the whole wheel, also while a secondary ring is shown.
       onCenter: () => cancelRadial(),
+      liveValues: a.liveValues,
     });
     const ring = a.view.element;
     ring.style.left = a.center.x + 'px';
@@ -168,8 +169,11 @@ export function createFeature({ dependencies }) {
     const overlay = document.createElement('div'); overlay.id = 'stcj-radial'; overlay.className = 'stcj-radial-overlay';
     overlay.tabIndex = -1; overlay.setAttribute('aria-label', 'Chat Jumper 快捷轮盘');
     previousFocus = document.activeElement;
+    // Live values are read once before the overlay covers the chat; it cannot scroll while open.
+    const liveValues = { floor: dependencies.getCurrentFloor() };
     active = {
       config,
+      liveValues,
       center: metrics.center,
       radius: metrics.radius,
       totalRadius: metrics.totalRadius,

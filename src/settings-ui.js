@@ -18,6 +18,7 @@ export const requiredServices = [
   "saveRangeStep",
   "setRootScale",
   "syncScaleControls",
+  "syncFloorIndicator",
   "toggleGlobalHide"
 ];
 
@@ -85,6 +86,8 @@ export function createFeature({ state, dependencies }) {
     for (const el of sortableElements) {
       root.insertBefore(el, insertBefore);
     }
+
+    dependencies.syncFloorIndicator();
   }
 
   function getButtonLabel(btnId) {

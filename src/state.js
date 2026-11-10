@@ -11,7 +11,8 @@ export function createState() {
       dragStart: { x: 0, y: 0, left: 0, top: 0 },
       suppressButtonActionUntil: 0,
       resizeRaf: null,
-      globalHidden: false
+      globalHidden: false,
+      detachFloorIndicator: null
     },
     favorites: {
       favoriteItems: [],
@@ -64,7 +65,25 @@ export function createState() {
     navigation: {
       messageVisibilityObserver: null,
       messageDomObserver: null,
-      visibleMessageIds: new Set()
+      visibleMessageIds: new Set(),
+      // Current-floor watch: one shared scroll/event subscription for every live floor display.
+      floorListeners: new Set(),
+      floorWatchDetach: null,
+      floorRaf: null,
+      currentFloor: null
+    },
+    outline: {
+      element: null,
+      detachFloor: null,
+      detachEvents: null,
+      rebuildRaf: null,
+      filter: '',
+      matches: [],
+      page: 1,
+      floor: null,
+      preview: null,
+      previewSeq: 0,
+      previewTimer: null
     },
     range: {
       activeRange: null,

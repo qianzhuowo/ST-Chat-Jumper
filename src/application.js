@@ -24,9 +24,10 @@ import * as actionRegistry from './action-registry.js';
 import * as radialView from './radial-view.js';
 import * as radial from './radial.js';
 import * as radialSettings from './radial-settings.js';
+import * as outline from './outline.js';
 import { createState } from './state.js';
 
-const features = [radialConfig, schemeStore, iconStore, actionRegistry, radialView, radial, radialSettings, settings, icons, utilities, host, navigation, editing, selection, messageContent, range, actions, toolbar, favoritePreview, favoriteManager, favoriteStore, favoriteActions, favoritePanel, chatLifecycle, settingsUI, lifecycle];
+const features = [radialConfig, schemeStore, iconStore, actionRegistry, radialView, radial, radialSettings, settings, icons, utilities, host, navigation, editing, selection, messageContent, range, actions, toolbar, outline, favoritePreview, favoriteManager, favoriteStore, favoriteActions, favoritePanel, chatLifecycle, settingsUI, lifecycle];
 
 /** Compose an isolated instance. Host imports are injected only at the entry point. */
 export function createApplication(hostImports) {

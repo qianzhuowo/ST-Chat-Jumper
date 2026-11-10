@@ -266,6 +266,90 @@ export function createFeature({ state, dependencies, hostImports }) {
     return Number.isNaN(id) ? 0 : id;
   }
 
+  // The current floor is the same anchor used by currentHead/currentTail.
+  // `id` is null while no message is rendered; `total` is the chat length.
+  function getCurrentFloor() {
+    const ctx = dependencies.getHostContext();
+    const total = Array.isArray(ctx?.chat) ? ctx.chat.length : 0;
+    const rendered = dependencies.getChatContainer()?.querySelector?.('.mes[mesid]');
+    return { id: total && rendered ? getAnchorMesId() : null, total };
+  }
+
+  function emitCurrentFloor() {
+    const nav = state.navigation;
+    const next = getCurrentFloor();
+    if (nav.currentFloor && nav.currentFloor.id === next.id && nav.currentFloor.total === next.total) return;
+    nav.currentFloor = next;
+    for (const listener of [...nav.floorListeners]) {
+      try { listener(next); } catch (error) { console.warn('[STCJ] current-floor listener failed', error); }
+    }
+  }
+
+  function startCurrentFloorWatch() {
+    const nav = state.navigation;
+    const schedule = () => {
+      if (nav.floorRaf) return;
+      nav.floorRaf = requestAnimationFrame(() => { nav.floorRaf = null; emitCurrentFloor(); });
+    };
+    // Capture phase sees the chat's own scroll and themes that move scrolling to an ancestor.
+    const onScroll = (event) => {
+      const target = event.target;
+      const chat = dependencies.getChatContainer();
+      if (target === document || target === chat || target?.contains?.(chat)) schedule();
+    };
+    // The floor under the viewport top also moves without scrolling: messages are added,
+    // removed, stream, load images or change height. Observe the message DOM directly.
+    const chat = dependencies.getChatContainer();
+    const resize = typeof window.ResizeObserver === 'function' ? new window.ResizeObserver(schedule) : null;
+    const observeMessages = (node) => {
+      if (!resize || node?.nodeType !== 1) return;
+      if (node.matches?.('.mes[mesid]')) resize.observe(node);
+      node.querySelectorAll?.('.mes[mesid]').forEach((el) => resize.observe(el));
+    };
+    const mutation = chat && typeof window.MutationObserver === 'function'
+      ? new window.MutationObserver((records) => {
+        for (const record of records) {
+          record.addedNodes.forEach(observeMessages);
+          record.removedNodes.forEach((node) => node.nodeType === 1 && node.matches?.('.mes[mesid]') && resize?.unobserve(node));
+        }
+        schedule();
+      })
+      : null;
+    mutation?.observe(chat, { childList: true, subtree: true });
+    observeMessages(chat);
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    window.addEventListener('resize', schedule, { passive: true });
+    nav.floorWatchDetach = () => {
+      document.removeEventListener('scroll', onScroll, { capture: true });
+      window.removeEventListener('resize', schedule);
+      mutation?.disconnect();
+      resize?.disconnect();
+      if (nav.floorRaf) cancelAnimationFrame(nav.floorRaf);
+      nav.floorRaf = null;
+      nav.currentFloor = null;
+    };
+  }
+
+  /** Subscribe to the current floor; the listener runs now and then only on change. Returns unsubscribe. */
+  function watchCurrentFloor(listener) {
+    const nav = state.navigation;
+    nav.floorListeners.add(listener);
+    if (!nav.floorWatchDetach) startCurrentFloorWatch();
+    nav.currentFloor ||= getCurrentFloor();
+    listener(nav.currentFloor);
+    return () => {
+      nav.floorListeners.delete(listener);
+      if (!nav.floorListeners.size) stopCurrentFloorWatch();
+    };
+  }
+
+  function stopCurrentFloorWatch() {
+    const nav = state.navigation;
+    nav.floorListeners.clear();
+    nav.floorWatchDetach?.();
+    nav.floorWatchDetach = null;
+  }
+
   function captureViewportAnchor() {
     const scrollEl = dependencies.getChatScrollElement();
     const anchorEl = getAnchorMessageElement();
@@ -358,5 +442,5 @@ export function createFeature({ state, dependencies, hostImports }) {
     return false;
   }
 
-  return { captureWindowScroll, restoreWindowScroll, restoreWindowScrollStable, scrollMessageInChat, getLastMessageId, getLatestMessageElement, triggerElementClick, quickFlipLatestMessagePage, getAnchorMessageElement, resetMessageVisibilityObservers, scheduleMessageVisibilityObserverReset, ensureMessageVisibilityObservers, alignCurrentMessage, getAnchorMesId, captureViewportAnchor, restoreViewportAnchor, trySlashChatJump, waitForMessageElement, jumpToMessage };
+  return { captureWindowScroll, restoreWindowScroll, restoreWindowScrollStable, scrollMessageInChat, getLastMessageId, getLatestMessageElement, triggerElementClick, quickFlipLatestMessagePage, getAnchorMessageElement, resetMessageVisibilityObservers, scheduleMessageVisibilityObserverReset, ensureMessageVisibilityObservers, alignCurrentMessage, getAnchorMesId, getCurrentFloor, watchCurrentFloor, stopCurrentFloorWatch, captureViewportAnchor, restoreViewportAnchor, trySlashChatJump, waitForMessageElement, jumpToMessage };
 }

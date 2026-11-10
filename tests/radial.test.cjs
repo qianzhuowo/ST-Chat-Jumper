@@ -99,7 +99,7 @@ function runtime(overrides = {}) {
   Object.assign(globalThis, { document, window, innerWidth: 1000, innerHeight: 700 });
   const config = { ...configModule.defaultRadialConfig(), menus: legacyMenus(), enabled: true, mouseEnabled: true, ...overrides };
   const executed = [];
-  const services = radialModule.createFeature({ dependencies: { ...viewModule.createFeature(), getRadialConfig: () => config, executeShortcutAction: async a => executed.push(a) } });
+  const services = radialModule.createFeature({ dependencies: { ...viewModule.createFeature(), getRadialConfig: () => config, getCurrentFloor: () => ({ id: 7, total: 9 }), executeShortcutAction: async a => executed.push(a) } });
   services.installRadialGestures();
   return { document, window, config, services, executed, opened: () => document.body.children.length > 0 };
 }

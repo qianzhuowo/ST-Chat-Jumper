@@ -1,5 +1,5 @@
 import { normalizeRadialAppearance } from './radial-config.js';
-import { actionIconSvg, iconSvg } from './action-catalog.js';
+import { actionIconSvg, actionLiveKind, formatLiveFloor, iconSvg } from './action-catalog.js';
 import { resolveIconSource } from './icon-library.js';
 
 export const requiredServices = [];
@@ -102,6 +102,24 @@ export function createSectorIcon(item) {
   return icon;
 }
 
+// Live actions (catalog `live`) show their value as a badge in the icon slot. Without a
+// runtime value (settings preview) a sample number keeps the cell's real proportions.
+export function createLiveBadge(item, liveValues) {
+  const kind = actionLiveKind(item?.action);
+  if (kind !== 'floor') return null;
+  const text = liveValues ? formatLiveFloor(liveValues.floor) : '128';
+  const badge = document.createElement('span');
+  badge.className = 'stcj-sector-icon stcj-sector-live';
+  badge.dataset.live = kind;
+  badge.dataset.digits = String(Math.min(text.length, 5));
+  const mark = document.createElement('small');
+  mark.textContent = '#';
+  const value = document.createElement('b');
+  value.textContent = text;
+  badge.append(mark, value);
+  return badge;
+}
+
 function applyWheelVariables(target, a) {
   const variables = {
     surface: a.surface,
@@ -117,7 +135,7 @@ function applyWheelVariables(target, a) {
   for (const [key, value] of Object.entries(variables)) target.style.setProperty(`--wheel-${key}`, value);
 }
 
-function buildRingButtons({ container, items, count, outerRadius, innerRadius, appearance, className, indexAttr, tier, extraIndexAttr, onClick, onHover, parentOpenIndex = -1, arc = null }) {
+function buildRingButtons({ container, items, count, outerRadius, innerRadius, appearance, className, indexAttr, tier, extraIndexAttr, onClick, onHover, parentOpenIndex = -1, arc = null, liveValues = null }) {
   const gap = appearance.shape === 'solid' ? 0 : appearance.gap + (appearance.shape === 'petals' ? 4 : 0);
   const arcFraction = arc ? arc.span / 360 : 1;
   return items.map((item, index) => {
@@ -150,7 +168,7 @@ function buildRingButtons({ container, items, count, outerRadius, innerRadius, a
     content.style.top = `${outerRadius + Math.sin(angle) * distance}px`;
     content.style.width = `${Math.max(32, Math.min((outerRadius - innerRadius) * (tier === 'sub' ? 2.1 : 1.35), 2 * Math.PI * distance * arcFraction / Math.max(1, count) * .73))}px`;
     if (item.color) content.style.color = item.color;
-    const icon = createSectorIcon(item);
+    const icon = createLiveBadge(item, liveValues) || createSectorIcon(item);
     if (icon) content.append(icon);
     if (item.showLabel) {
       const label = document.createElement('span');
@@ -192,6 +210,8 @@ export function createFeature() {
     // Preview only: every parent's secondary arc at once, as [{ parentIndex, menu, appearance }].
     cascade = null,
     onCascadeChoose,
+    // Runtime values for live actions, e.g. { floor: { id, total } }; omitted in previews.
+    liveValues = null,
   }) {
     const a = normalizeRadialAppearance(appearance);
     const hasSubmenu = !!(submenu && Array.isArray(submenu.items) && submenu.items.length > 0);
@@ -236,6 +256,7 @@ export function createFeature() {
         onClick: onSubChoose || onChoose,
         onHover: onSubHover,
         arc: subArc,
+        liveValues,
       });
       ring.append(subringEl);
     }
@@ -258,7 +279,7 @@ export function createFeature() {
         container: el, items: group.menu.items, count: group.menu.items.length,
         outerRadius: groupBounds.subOuter, innerRadius: groupBounds.subInner, appearance: groupA,
         className: 'stcj-radial-subitem', indexAttr: 'subIndex', tier: 'sub',
-        onClick: i => onCascadeChoose?.(group.parentIndex, i), arc,
+        onClick: i => onCascadeChoose?.(group.parentIndex, i), arc, liveValues,
       });
       groupButtons.forEach((b, i) => b.classList.toggle('is-selected', group.parentIndex === parentIndex && i === subSelected));
       ring.append(el); cascadeGroups.push({ parentIndex: group.parentIndex, buttons: groupButtons });
@@ -279,6 +300,7 @@ export function createFeature() {
       parentOpenIndex: parentIndex,
       onClick: onChoose,
       onHover,
+      liveValues,
     });
 
     const center = document.createElement('button');

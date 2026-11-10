@@ -28,7 +28,8 @@ index.js → application.js → 功能工厂
 | `settings.js` | localStorage、extensionSettings 读取、校验、默认合并和持久化 |
 | `settings-ui.js` | 扩展设置面板、按钮布局与拖动排序 |
 | `host.js` | 宿主上下文/事件名兼容、弹窗、聊天滚动容器、swipe/editor/chat-jump API、宿主样式恢复 |
-| `navigation.js` | 视口锚点、楼层跳转、即时滚动、可见楼层观察器、快速翻页 |
+| `navigation.js` | 视口锚点、楼层跳转、即时滚动、可见楼层观察器、快速翻页；`watchCurrentFloor` 是所有“当前楼层”实时展示的唯一订阅源 |
+| `outline.js` | 楼层大纲面板、筛选、分页（只构建当前页的行）、跳转与气泡组原地预览（复用收藏预览的格式化/净化管线） |
 | `range.js` | 楼层/区间解析、区间事务、前后翻段、恢复默认视图；守护 tt managed DOM 所有权 |
 | `message-content.js` | 消息文本、swipe 分支和当前快照读取 |
 | `selection.js` | 选中文字提取、归一化、编辑框文本匹配/偏移映射 |
@@ -54,7 +55,8 @@ index.js → application.js → 功能工厂
 | `favorites` | store 管理记录/保存队列；preview 管理 regex promise、iframe token 与消息监听标记；manager/panel 管理其界面状态；actions 管理点选模式 |
 | `editing` | editing 管理编辑快照、镜像和忙标记 |
 | `range` | range 管理激活区间、事务忙标记与操作序号 |
-| `navigation` | navigation 管理可见消息集合和 DOM/可见性观察器 |
+| `navigation` | navigation 管理可见消息集合、DOM/可见性观察器与当前楼层订阅（最后一个订阅者退订时卸载滚动/DOM 监听） |
+| `outline` | outline 管理面板 DOM、筛选词与匹配楼层、当前页、预览与其定时器/序号（每页条数存在扩展设置 `outlinePageSize`；左/右侧是浏览器布局设置 `layout.settings.outlineSide`，面板位置按 `visualViewport` 计算） |
 | `host` | host 管理宿主样式写入/闪烁抑制；favorite-store 管理聊天内容索引，聊天切换时使其失效 |
 | `lifecycle` | lifecycle/chat-lifecycle 管理实例、监听卸载函数、聊天引用与轮询；settings-ui 提供设置挂载 observer |
 
@@ -91,19 +93,14 @@ node --test tests/compatibility.test.cjs tests/instant-navigation.test.cjs tests
 
 既有两组回归测试已改为真实模块工厂调用；`module-harness.cjs` 只在功能边界注入 mock，不截取或拼接生产源码。新增测试覆盖完整 ESM 图链接、依赖声明、状态路径、实例隔离、存储兼容、区间解析、早期取消、重复重载清理和宿主样式恢复。
 
-真实宿主冒烟工具：
-
-```sh
-node tests/runtime-smoke.cjs 9223 tests/module-tt-results.json --tt
-node tests/runtime-smoke.cjs 9224 tests/module-st-results.json
-```
-
-它需要可用的 CDP 页面与已就绪的酒馆。tt 模式用 CDP Fetch 在内存中提供工作区 JS，结束后撤销拦截并重载已部署页面，不改宿主文件/扩展安装目录；该模式不是 tt 磁盘部署路径测试。ST 模式在本地真实 HTTP 静态服务器加载原生模块，使用现有本机 Basic Auth 配置但不把凭据写入报告，结束后关闭仅本次启动的独立 headless 浏览器。测试只挂载 UI、打开收藏管理器和重载/销毁，不执行真实聊天编辑、删除或元数据保存。结果文件中的时间戳用于区分本次结果和历史 `tt-*-results.json`。
+真实宿主（ST / tt）上的冒烟验证使用本机 CDP 脚本，依赖本机端口与路径，属于本地工具，不随仓库发布（见 `.gitignore`）。
 
 
 ## 手势轮盘与独立设置
 
 轮盘新增 `radial-config`、`action-registry`、`radial`、`radial-settings` feature；仍使用 `createFeature` 与 `requiredServices`，不引入构建依赖或全局服务查找器。几何/归一化纯函数与实例服务同模块导出，旧测试工厂枚举保持兼容。`toolbar.buildUI` 安装手势，`lifecycle` 销毁手势与 dialog，`chat-lifecycle` 在聊天切换时取消待执行轮盘。`settings-ui` 扩展设置入口只打开独立原生 dialog。
+
+动作目录条目可声明 `live: 'floor'`：悬浮条按钮与轮盘格子都以实时楼层徽章代替图标。悬浮条通过 `watchCurrentFloor` 订阅（仅在按钮启用时），轮盘在打开时读取一次 `getCurrentFloor()` 并以 `liveValues` 传给 `createRadialView`；设置预览未传值时显示示例数字。
 
 动作 provider 仅经 `registerShortcutAction` 注册，轮盘调用分发服务，不依赖可见悬浮条按钮。[完整契约与参数说明](radial-menu.md)。
 
