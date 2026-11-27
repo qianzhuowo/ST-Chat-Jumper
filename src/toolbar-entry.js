@@ -32,18 +32,23 @@ export function createFeature({ state, dependencies }) {
 
   function createEntry(placement) {
     const inQuickReply = placement === 'qrButtons';
-    const entry = document.createElement(inQuickReply ? 'button' : 'div');
+    const entry = document.createElement('div');
     entry.id = ENTRY_ID;
     entry.dataset.placement = placement;
+    entry.tabIndex = 0;
+    entry.setAttribute('role', 'button');
     if (inQuickReply) {
-      entry.type = 'button';
-      entry.className = 'qr--button stcj-toolbar-entry';
-      entry.innerHTML = '<i class="fa-solid" aria-hidden="true"></i><span>悬浮条</span>';
+      // Same DOM as a host Quick Reply button, so the host QR stylesheet styles it identically.
+      entry.className = 'qr--button menu_button interactable stcj-toolbar-entry';
+      const icon = document.createElement('div');
+      icon.className = 'qr--button-icon fa-solid';
+      const label = document.createElement('div');
+      label.className = 'qr--button-label';
+      label.textContent = '悬浮条';
+      entry.append(icon, label);
     } else {
       // Same shape as the host's send-form icons; host keyboard.js turns Enter into a click.
       entry.className = 'stcj-toolbar-entry fa-solid interactable';
-      entry.tabIndex = 0;
-      entry.setAttribute('role', 'button');
     }
     entry.addEventListener('click', (event) => {
       event.preventDefault();
@@ -55,7 +60,7 @@ export function createFeature({ state, dependencies }) {
 
   function renderEntryState(entry) {
     const hidden = !!state.layout.globalHidden;
-    const icon = entry.querySelector('i') || entry;
+    const icon = entry.querySelector('.qr--button-icon') || entry;
     icon.classList.toggle('fa-eye', hidden);
     icon.classList.toggle('fa-eye-slash', !hidden);
     entry.title = hidden ? '显示 Chat Jumper 悬浮条' : '隐藏 Chat Jumper 悬浮条';
