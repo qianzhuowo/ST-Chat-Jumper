@@ -3140,13 +3140,29 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
 /* ========== 日间模式：楼层大纲 + 气泡预览 ========== */
 #stcj-outline.stcj-outline.stcj-theme-light {
   color: #1e293b;
-  background: rgba(255, 255, 255, 0.96);
+  /* 不透明：浅色底上哪怕一点透明度也会透出背后宿主面板的高亮文字 */
+  background: #ffffff;
   border-color: rgba(15, 23, 42, 0.1);
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
 }
 
 #stcj-outline.stcj-theme-light .stcj-outline-title { color: #0369a1; }
 #stcj-outline.stcj-theme-light .stcj-outline-title > span { color: #0f172a; }
+
+/* 次要文字：夜间靠透明度变淡，浅色底上改用不透明的灰蓝以保证对比度 */
+#stcj-outline.stcj-theme-light .stcj-outline-count,
+#stcj-outline.stcj-theme-light .stcj-outline-page-total,
+#stcj-outline.stcj-theme-light .stcj-outline-empty,
+#stcj-outline-preview.stcj-theme-light .stcj-outline-preview-header small,
+#stcj-outline-preview.stcj-theme-light .stcj-outline-bubble-meta span {
+  color: #475569;
+  opacity: 1;
+}
+
+#stcj-outline.stcj-theme-light .stcj-outline-floor {
+  color: #64748b;
+  opacity: 1;
+}
 
 #stcj-outline.stcj-theme-light .stcj-outline-icon-btn:hover,
 #stcj-outline-preview.stcj-theme-light .stcj-outline-icon-btn:hover { background: rgba(15, 23, 42, 0.07); }
@@ -3193,7 +3209,7 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   --SmartThemeQuoteColor: #b45309;
   --SmartThemeUnderlineColor: #15803d;
   color: #1e293b;
-  background: rgba(255, 255, 255, 0.98);
+  background: #ffffff;
   border-color: rgba(15, 23, 42, 0.12);
   box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
 }
