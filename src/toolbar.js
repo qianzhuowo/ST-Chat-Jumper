@@ -328,7 +328,6 @@ export function createFeature({ state, dependencies }) {
     const root = document.getElementById(constants.ROOT_ID);
     if (root) {
       root.classList.toggle('stcj-global-hidden', state.layout.globalHidden);
-    dependencies.syncToolbarEntry();
       if (!state.layout.globalHidden) applyRootScale(root);
     }
     dependencies.syncToolbarEntry();
@@ -640,6 +639,8 @@ export function createFeature({ state, dependencies }) {
     state.layout.globalHidden = dependencies.loadGlobalHidden();
     state.favorites.favoritesPreviewMode = dependencies.loadFavoritesPreviewMode();
     root.classList.toggle('stcj-global-hidden', state.layout.globalHidden);
+    // 便捷入口随全局隐藏状态显示图标；宿主锚点尚未渲染时由其 observer 稍后插入
+    dependencies.syncToolbarEntry();
 
     // 挂载扩展设置面板
     dependencies.mountSettingsPanel();
