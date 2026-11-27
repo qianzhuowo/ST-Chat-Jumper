@@ -24,6 +24,9 @@ export const ACTION_CATALOG = Object.freeze([
   // (navigation.watchCurrentFloor) instead of its icon; the icon is used in pickers.
   { id: 'currentFloor', label: '当前楼层序号', icon: 'hash', live: 'floor' },
   { id: 'toggleOutline', label: '楼层大纲', icon: 'outline' },
+  // `requires` names a host extension the action drives; the toolbar settings and radial
+  // picker only offer it while that extension is available (action-registry checks it).
+  { id: 'swipePreview', label: '分支预览 (Swipe Previewer)', icon: 'layers', requires: 'swipePreviewer' },
   { id: 'toggleCollapse', label: '收起/展开', icon: 'minus' },
   { id: 'toggleOrientation', label: '横/竖布局切换', icon: 'horizontal' },
   { id: 'togglePin', label: '点选收藏', icon: 'pin' },

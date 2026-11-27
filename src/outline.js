@@ -11,8 +11,10 @@ export const requiredServices = [
   'getHostEventTypes',
   'jumpToMessage',
   'getOutlinePageSize',
+  'getOutlineTheme',
   'normalizeFavoriteText',
   'saveOutlinePageSize',
+  'saveOutlineTheme',
   'saveSettings',
   'updateOutlineToggleButton',
   'watchCurrentFloor',
@@ -82,9 +84,9 @@ export function createFeature({ state, dependencies }) {
     root.setAttribute('aria-label', '楼层大纲');
     root.innerHTML = `
       <header class="stcj-outline-header">
-        <div class="stcj-outline-title">${constants.ICONS.outline}<span>楼层大纲</span><small class="stcj-outline-count"></small></div>
-        <button type="button" class="stcj-outline-icon-btn" data-outline-action="swap-side">${constants.ICONS.horizontal}</button>
-        <button type="button" class="stcj-outline-icon-btn" data-outline-action="locate" title="定位到当前楼层">${constants.ICONS.head}</button>
+        <div class="stcj-outline-title" title="拖动标题栏移动面板">${constants.ICONS.outline}<span>楼层大纲</span><small class="stcj-outline-count"></small></div>
+        <button type="button" class="stcj-outline-icon-btn" data-outline-action="theme"></button>
+        <button type="button" class="stcj-outline-icon-btn" data-outline-action="locate" title="定位到当前楼层">${constants.ICONS.crosshair}</button>
         <button type="button" class="stcj-outline-icon-btn" data-outline-action="close" title="关闭大纲 (Esc)">${constants.ICONS.close}</button>
       </header>
       <label class="stcj-outline-search">${constants.ICONS.search}<input type="search" placeholder="楼层号或关键字" aria-label="筛选楼层" /></label>
@@ -99,7 +101,8 @@ export function createFeature({ state, dependencies }) {
         <select class="stcj-outline-page-size" aria-label="每页条数" title="每页条数">
           ${constants.OUTLINE_PAGE_SIZES.map(size => `<option value="${size}">${size ? `${size} 条/页` : '不设限'}</option>`).join('')}
         </select>
-      </footer>`;
+      </footer>
+      <div class="stcj-outline-resize" title="拖动调整大小" aria-hidden="true"></div>`;
     root.addEventListener('click', onPanelClick);
     root.addEventListener('keydown', onKeydown);
     root.addEventListener('pointerover', onPanelPointerOver);
@@ -128,17 +131,25 @@ export function createFeature({ state, dependencies }) {
     }, { passive: true });
     // Same host drawer guard as the settings dialog: presses here must not close host panels.
     for (const type of ['mousedown', 'touchstart']) root.addEventListener(type, e => e.stopPropagation(), { passive: true });
+    attachPanelDrag(root);
+    attachPanelResize(root);
     return root;
   }
 
-  function outlineSide() {
-    return state.layout.settings?.outlineSide === 'right' ? 'right' : 'left';
+  // Colour scheme shared by the panel and its preview; 'dark' is the original look.
+  function applyTheme() {
+    const light = dependencies.getOutlineTheme() === 'light';
+    panel()?.classList.toggle('stcj-theme-light', light);
+    previewElement()?.classList.toggle('stcj-theme-light', light);
+    const btn = panel()?.querySelector('[data-outline-action="theme"]');
+    if (!btn) return;
+    btn.innerHTML = light ? constants.ICONS.moon : constants.ICONS.sun;
+    btn.title = light ? '切换为夜间模式' : '切换为日间模式';
   }
 
-  function swapSide() {
-    state.layout.settings.outlineSide = outlineSide() === 'left' ? 'right' : 'left';
-    dependencies.saveSettings();
-    layoutPanel();
+  function toggleTheme() {
+    dependencies.saveOutlineTheme(dependencies.getOutlineTheme() === 'light' ? 'dark' : 'light');
+    applyTheme();
   }
 
   // The visible area. On phones the layout viewport can be wider or taller than the screen
@@ -150,25 +161,112 @@ export function createFeature({ state, dependencies }) {
       : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   }
 
+  const MARGIN = 8;
+
+  // Size and position within the visible area. Position is stored like the favorites panel:
+  // relative to the free space, so it survives viewport changes; unset means the default slot
+  // (left edge, under the host top bar, full height).
+  function panelGeometry(width, height) {
+    const vp = visibleViewport();
+    const s = state.layout.settings;
+    const topBar = document.getElementById('top-settings-holder')?.getBoundingClientRect().bottom || 0;
+    const defaultTop = Math.max(vp.top, topBar) + MARGIN;
+    const maxW = Math.max(120, vp.width - MARGIN * 2);
+    const maxH = Math.max(120, vp.height - MARGIN * 2);
+    const w = Math.min(maxW, Math.max(constants.OUTLINE_MIN_W, width ?? s.outlineW ?? constants.OUTLINE_DEFAULT_W));
+    const h = Math.min(maxH, Math.max(constants.OUTLINE_MIN_H, height ?? s.outlineH ?? vp.top + vp.height - MARGIN - defaultTop));
+    const freeX = Math.max(0, maxW - w);
+    const freeY = Math.max(0, maxH - h);
+    const left = vp.left + MARGIN + (s.outlineRx ?? 0) * freeX;
+    const top = typeof s.outlineRy === 'number'
+      ? vp.top + MARGIN + s.outlineRy * freeY
+      : Math.min(defaultTop, vp.top + MARGIN + freeY);
+    return { vp, w, h, left, top, freeX, freeY };
+  }
+
   function layoutPanel() {
     const root = panel();
     if (!root) return;
-    const side = outlineSide();
-    const vp = visibleViewport();
-    const margin = 8;
-    const width = Math.min(300, vp.width - margin * 2);
-    const topBar = document.getElementById('top-settings-holder')?.getBoundingClientRect().bottom || 0;
-    const top = Math.max(vp.top, topBar) + margin;
-    root.classList.toggle('is-left', side === 'left');
-    const swap = root.querySelector('[data-outline-action="swap-side"]');
-    swap.title = side === 'left' ? '移到右侧' : '移到左侧';
-    Object.assign(root.style, {
-      left: `${side === 'left' ? vp.left + margin : vp.left + vp.width - width - margin}px`,
-      top: `${top}px`,
-      width: `${width}px`,
-      height: `${Math.max(160, vp.top + vp.height - margin - top)}px`,
-    });
+    const { w, h, left, top } = panelGeometry();
+    Object.assign(root.style, { left: `${left}px`, top: `${top}px`, width: `${w}px`, height: `${h}px` });
     positionPreview();
+  }
+
+  // Store a viewport position (top-left corner) as ratios of the free space for size w × h.
+  function storePosition(left, top, w, h) {
+    const { vp, freeX, freeY } = panelGeometry(w, h);
+    const s = state.layout.settings;
+    s.outlineRx = freeX > 0 ? Math.min(1, Math.max(0, (left - vp.left - MARGIN) / freeX)) : 0;
+    s.outlineRy = freeY > 0 ? Math.min(1, Math.max(0, (top - vp.top - MARGIN) / freeY)) : 0;
+  }
+
+  // Shared pointer-capture gesture for the header drag and the corner resize.
+  function trackPointer(handle, { canStart, move, end }) {
+    let gesture = null;
+    handle.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (!canStart(event)) return;
+      const rect = panel().getBoundingClientRect();
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, rect, moved: false };
+      try { handle.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', event => {
+      if (gesture?.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
+      if (!gesture.moved && Math.hypot(dx, dy) < 3) return;
+      if (!gesture.moved) { gesture.moved = true; closePreview(); }
+      move(gesture.rect, dx, dy);
+      event.preventDefault();
+    });
+    const finish = event => {
+      if (gesture?.id !== event.pointerId) return;
+      try { handle.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
+      const moved = gesture.moved;
+      gesture = null;
+      if (moved && event.type === 'pointerup') { end(); dependencies.saveSettings(); }
+      layoutPanel();
+    };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+  }
+
+  function attachPanelDrag(root) {
+    const header = root.querySelector('.stcj-outline-header');
+    trackPointer(header, {
+      canStart: event => !(event.target instanceof Element && event.target.closest('button')),
+      move: (rect, dx, dy) => {
+        const { vp } = panelGeometry(rect.width, rect.height);
+        const left = Math.min(Math.max(rect.left + dx, vp.left + MARGIN), vp.left + vp.width - MARGIN - rect.width);
+        const top = Math.min(Math.max(rect.top + dy, vp.top + MARGIN), vp.top + vp.height - MARGIN - rect.height);
+        root.style.left = `${left}px`;
+        root.style.top = `${top}px`;
+      },
+      end: () => {
+        const rect = root.getBoundingClientRect();
+        storePosition(rect.left, rect.top, rect.width, rect.height);
+      },
+    });
+  }
+
+  // Bottom-right corner: the top-left corner stays put while the size changes.
+  function attachPanelResize(root) {
+    trackPointer(root.querySelector('.stcj-outline-resize'), {
+      canStart: () => true,
+      move: (rect, dx, dy) => {
+        const vp = visibleViewport();
+        const w = Math.min(Math.max(constants.OUTLINE_MIN_W, rect.width + dx), vp.left + vp.width - MARGIN - rect.left);
+        const h = Math.min(Math.max(constants.OUTLINE_MIN_H, rect.height + dy), vp.top + vp.height - MARGIN - rect.top);
+        root.style.width = `${w}px`;
+        root.style.height = `${h}px`;
+      },
+      end: () => {
+        const rect = root.getBoundingClientRect();
+        state.layout.settings.outlineW = Math.round(rect.width);
+        state.layout.settings.outlineH = Math.round(rect.height);
+        storePosition(rect.left, rect.top, rect.width, rect.height);
+      },
+    });
   }
 
   // Filtering reads every message's text; only the current page's rows are built.
@@ -327,6 +425,7 @@ export function createFeature({ state, dependencies }) {
     const root = buildPanel();
     state.outline.element = root;
     document.body.append(root);
+    applyTheme();
     layoutPanel();
     window.addEventListener('resize', layoutPanel, { passive: true });
     window.visualViewport?.addEventListener('resize', layoutPanel, { passive: true });
@@ -379,7 +478,7 @@ export function createFeature({ state, dependencies }) {
     const action = target.dataset.outlineAction;
     if (action === 'close') return closeOutline();
     if (action === 'locate') return locateCurrent();
-    if (action === 'swap-side') return swapSide();
+    if (action === 'theme') return toggleTheme();
     if (action.startsWith('page-')) {
       const pages = outlinePageCount(state.outline.matches.length, dependencies.getOutlinePageSize());
       const page = { 'page-first': 1, 'page-prev': state.outline.page - 1, 'page-next': state.outline.page + 1, 'page-last': pages }[action];
@@ -450,6 +549,7 @@ export function createFeature({ state, dependencies }) {
       if (Number.isInteger(id)) void jumpTo(id);
     });
     for (const type of ['mousedown', 'touchstart']) el.addEventListener(type, e => e.stopPropagation(), { passive: true });
+    el.classList.toggle('stcj-theme-light', dependencies.getOutlineTheme() === 'light');
     document.body.append(el);
     return el;
   }
@@ -533,9 +633,12 @@ export function createFeature({ state, dependencies }) {
     const vp = visibleViewport();
     const margin = 8;
     const width = Math.min(380, vp.width - margin * 2);
-    const onLeft = root.classList.contains('is-left');
-    const left = onLeft ? panelRect.right + margin : panelRect.left - margin - width;
-    const fitsBeside = onLeft ? left + width <= vp.left + vp.width - margin : left >= vp.left + margin;
+    // Beside the panel on the side with more room; the panel can sit anywhere now.
+    const spaceRight = vp.left + vp.width - margin - panelRect.right - margin;
+    const spaceLeft = panelRect.left - margin - vp.left - margin;
+    const onRight = spaceRight >= spaceLeft;
+    const left = onRight ? panelRect.right + margin : panelRect.left - margin - width;
+    const fitsBeside = (onRight ? spaceRight : spaceLeft) >= width;
     el.style.width = `${width}px`;
     el.style.maxHeight = `${Math.round(fitsBeside ? Math.min(560, vp.height * 0.7) : vp.height * 0.58)}px`;
     el.classList.toggle('is-sheet', !fitsBeside);

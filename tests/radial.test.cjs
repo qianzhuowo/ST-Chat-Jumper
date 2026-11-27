@@ -443,6 +443,7 @@ test('settings UI supports same-page primary/secondary free editing, co-screen p
         { type: 'plugin', id: 'recent1', label: '最近收藏' },
         { type: 'plugin', id: 'showRange', label: '区间选择' },
       ],
+      isShortcutActionAvailable: () => true,
       cancelRadial: () => r.services.cancelRadial(),
       openRadial: () => r.services.openRadial(),
       createRadialView: opts => viewModule.createFeature().createRadialView(opts),
@@ -566,7 +567,7 @@ function editorReviewFixture(overrides) {
   let saved = r.config, writes=0;
   const feature = radialSettingsModule.createFeature({dependencies:{
     getRadialConfig:()=>saved,saveRadialConfig:next=>{saved=configModule.normalizeRadialConfig(next);writes++;},
-    listShortcutActions:()=>[{type:'plugin',id:'prev',label:'prev'}],cancelRadial:()=>{},
+    listShortcutActions:()=>[{type:'plugin',id:'prev',label:'prev'}],isShortcutActionAvailable:()=>true,cancelRadial:()=>{},
     createRadialView:opts=>viewModule.createFeature().createRadialView(opts),loadFavoritesPreviewMode:()=> 'swipe_default',getSchemeLibrary: () => ({ actions: [], appearances: [] }), saveSchemeLibrary: async () => {}, loadSchemeLibrary: async () => {}, onSchemeLibraryChange: () => () => {}, schemeLibraryStatus: () => ({ loaded: true, error: '', actions: 0, appearances: 0 }), saveFavoritesPreviewMode:()=>{}
   }});
   feature.mountRadialSettings(mount);
@@ -679,4 +680,13 @@ test('toolbar visibility action is registered and calls the toggle service', asy
   const entry = reg.listShortcutActions().find(a => a.id === 'toggleToolbar');
   assert.ok(entry); await reg.executeShortcutAction({ type: entry.type, id: entry.id });
   assert.equal(hidden, 1); assert.equal(handled, 0);
+});
+test('extension-backed actions are available only while their host extension is', () => {
+  let installed = false;
+  const reg = registryModule.createFeature({ dependencies: { handleAction() {}, toastInfo() {}, toggleGlobalHide() {}, isSwipePreviewerAvailable: () => installed } });
+  assert.equal(reg.isShortcutActionAvailable({ type: 'plugin', id: 'swipePreview' }), false);
+  assert.equal(reg.isShortcutActionAvailable({ type: 'plugin', id: 'prev' }), true);
+  assert.equal(reg.isShortcutActionAvailable({ type: 'plugin', id: 'missing' }), false);
+  installed = true;
+  assert.equal(reg.isShortcutActionAvailable({ type: 'plugin', id: 'swipePreview' }), true);
 });

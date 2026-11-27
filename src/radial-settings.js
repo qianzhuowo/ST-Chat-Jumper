@@ -8,7 +8,7 @@ import { iconUsage, migrateInlinePaths, newIconId, stripIconFromLibrary } from '
 import { SCHEME_LIMIT, newSchemeId, readSchemeImport, mergeSchemeLibrary, schemeExport } from './scheme-store.js';
 import { openIconPicker } from './icon-picker.js';
 
-export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode', 'loadIconLibrary', 'saveIconLibrary', 'onIconLibraryChange', 'iconLibraryStatus', 'loadSchemeLibrary', 'saveSchemeLibrary', 'getSchemeLibrary', 'onSchemeLibraryChange', 'schemeLibraryStatus'];
+export const requiredServices = ['getRadialConfig', 'saveRadialConfig', 'listShortcutActions', 'isShortcutActionAvailable', 'cancelRadial', 'createRadialView', 'loadFavoritesPreviewMode', 'saveFavoritesPreviewMode', 'loadIconLibrary', 'saveIconLibrary', 'onIconLibraryChange', 'iconLibraryStatus', 'loadSchemeLibrary', 'saveSchemeLibrary', 'getSchemeLibrary', 'onSchemeLibraryChange', 'schemeLibraryStatus'];
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
@@ -418,7 +418,9 @@ export function createFeature({ dependencies }) {
     const actionLayout = element('div', 'stcj-config-layout stcj-actions-layout'); actionPage.append(actionLayout);
     preview(actionLayout);
     const editor = element('div', 'stcj-config-controls'); actionLayout.append(editor);
-    const actions = dependencies.listShortcutActions();
+    // Actions whose host extension is missing are not offered (a saved cell keeps its reference).
+    // Read per render: host extensions may finish loading after this dialog is mounted.
+    const availableActions = () => dependencies.listShortcutActions().filter(action => dependencies.isShortcutActionAvailable(action));
     function renderCenterInspector() {
       const box = card(editor); box.dataset.centerInspector = 'true';
       const head = element('div', 'stcj-inspector-head'); box.append(head);
@@ -470,6 +472,7 @@ export function createFeature({ dependencies }) {
       field(inspector, '在轮盘上显示图标', { type: 'checkbox', value: item.showIcon !== false, aria: '在轮盘上显示图标', onChange: v => mutateSelected(v ? '显示动作图标' : '隐藏动作图标', selected => { selected.showIcon = v; }) });
       iconRow(inspector, item, '跟随动作（默认）', iconId => mutateSelected(iconId ? '修改动作图标' : '恢复默认图标', selected => { delete selected.iconPath; if (iconId) selected.iconId = iconId; else delete selected.iconId; }));
       {
+        const actions = availableActions();
         const type = item.submenu && !item.action ? 'empty' : actionTypeOf(item);
         const typeChoices = Object.entries(ACTION_TYPES).map(([id, t]) => [id, t.label]);
         if (!typeChoices.some(c => c[0] === type)) typeChoices.push([type, `${type}（未支持，保留）`]);

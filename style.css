@@ -2429,7 +2429,8 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
 #stcj-root .stcj-btn.stcj-floor-indicator[data-digits="4"] { font-size: 10.5px; }
 #stcj-root .stcj-btn.stcj-floor-indicator[data-digits="5"] { font-size: 9px; letter-spacing: -0.05em; }
 
-#stcj-root .stcj-btn[data-action="toggleOutline"] {
+#stcj-root .stcj-btn[data-action="toggleOutline"],
+#stcj-root .stcj-btn[data-action="swipePreview"] {
   color: #a5d8ff;
 }
 
@@ -2440,7 +2441,7 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
 }
 
 /* ========== 楼层大纲 ========== */
-/* 楼层大纲：位置与尺寸由 outline.js 按可见视口计算（左/右侧记录在浏览器）；临时覆盖层，盖过悬浮条 */
+/* 楼层大纲：位置与尺寸由 outline.js 按可见视口计算（拖动标题栏移动、右下角调节大小，记录在浏览器）；临时覆盖层，盖过悬浮条 */
 #stcj-outline.stcj-outline {
   position: fixed;
   top: 48px;
@@ -2479,6 +2480,36 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   align-items: center;
   gap: 4px;
   padding: 10px 8px 6px 12px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#stcj-outline .stcj-outline-header:active {
+  cursor: grabbing;
+}
+
+#stcj-outline .stcj-outline-header button {
+  cursor: pointer;
+}
+
+/* 右下角缩放手柄 */
+#stcj-outline .stcj-outline-resize {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0.5;
+  background: linear-gradient(135deg, transparent 0 50%, rgba(255, 255, 255, 0.6) 50% 60%, transparent 60% 70%, rgba(255, 255, 255, 0.6) 70% 80%, transparent 80% 90%, rgba(255, 255, 255, 0.6) 90% 100%);
+  border-bottom-right-radius: 12px;
+}
+
+#stcj-outline .stcj-outline-resize:hover {
+  opacity: 0.9;
 }
 
 #stcj-outline .stcj-outline-title {
@@ -2572,7 +2603,7 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 6px 8px 8px;
+  padding: 6px 16px 8px 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 12px;
 }
@@ -2885,3 +2916,292 @@ body.stcj-pin-mode #stcj-root .stcj-btn.stcj-pin {
   overflow: hidden;
   white-space: pre-wrap;
 }
+
+/* ========== 便捷入口（快捷隐藏/显示悬浮条） ========== */
+button.stcj-toolbar-entry.qr--button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.stcj-settings-item.is-unavailable {
+  opacity: 0.6;
+}
+
+.stcj-settings-item.is-unavailable small {
+  margin-left: 4px;
+  opacity: 0.8;
+}
+
+/* ========== 日间模式：悬浮条 + 最近收藏面板 ========== */
+/* 夜间为原有样式；日间仅在 .stcj-theme-light 下覆盖配色，不改变尺寸与布局。 */
+#stcj-root.stcj-root.stcj-theme-light {
+  background: rgba(250, 251, 253, 0.84);
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
+}
+
+#stcj-root.stcj-theme-light.stcj-drag-arming,
+#stcj-root.stcj-theme-light.stcj-dragging {
+  background: rgba(241, 245, 249, 0.94);
+  border-color: rgba(37, 99, 235, 0.32);
+  box-shadow:
+    0 8px 28px rgba(15, 23, 42, 0.16),
+    0 0 0 1px rgba(37, 99, 235, 0.14),
+    0 0 18px rgba(37, 99, 235, 0.14);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn {
+  color: #334155;
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.07);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn:hover {
+  color: #0f172a;
+  background: rgba(15, 23, 42, 0.09);
+  border-color: rgba(15, 23, 42, 0.14);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn:active {
+  background: rgba(15, 23, 42, 0.07);
+  box-shadow: none;
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-mini {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+#stcj-root.stcj-theme-light .stcj-pin-group {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-pin {
+  background: transparent;
+  border-color: transparent;
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-pin-arrow {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+/* 强调色按钮：与夜间同色相、加深以适配浅色底 */
+#stcj-root.stcj-theme-light .stcj-btn[data-action^="recent"] { color: #c2410c; }
+#stcj-root.stcj-theme-light .stcj-btn[data-action^="recent"]:hover { color: #9a3412; background: rgba(234, 88, 12, 0.12); }
+
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickPage"],
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickPageLeft"] { color: #7c3aed; }
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickPage"]:hover,
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickPageLeft"]:hover { color: #5b21b6; background: rgba(124, 58, 237, 0.12); }
+
+#stcj-root.stcj-theme-light .stcj-btn[data-action="showRange"],
+#stcj-root.stcj-theme-light .stcj-btn[data-action="resetRange"],
+#stcj-root.stcj-theme-light .stcj-btn[data-action="editRange"] { color: #6d28d9; }
+#stcj-root.stcj-theme-light .stcj-btn[data-action="showRange"]:hover,
+#stcj-root.stcj-theme-light .stcj-btn[data-action="resetRange"]:hover { color: #4c1d95; background: rgba(124, 58, 237, 0.12); }
+#stcj-root.stcj-theme-light.stcj-range-active .stcj-btn[data-action="showRange"] {
+  color: #4c1d95;
+  background: rgba(124, 58, 237, 0.16);
+  border-color: rgba(124, 58, 237, 0.35);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickEdit"],
+#stcj-root.stcj-theme-light .stcj-btn[data-action^="current"] { color: #15803d; }
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickEdit"]:hover,
+#stcj-root.stcj-theme-light .stcj-btn[data-action^="current"]:hover { color: #166534; background: rgba(22, 163, 74, 0.12); }
+#stcj-root.stcj-theme-light .stcj-btn[data-action="quickEdit"].stcj-editing {
+  color: #166534;
+  background: rgba(22, 163, 74, 0.16);
+  border-color: rgba(22, 163, 74, 0.38);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-toggle,
+#stcj-root.stcj-theme-light .stcj-btn[data-action="toggleOutline"],
+#stcj-root.stcj-theme-light .stcj-btn[data-action="swipePreview"] { color: #0369a1; }
+#stcj-root.stcj-theme-light .stcj-btn.stcj-toggle:hover,
+#stcj-root.stcj-theme-light .stcj-btn[data-action="toggleOutline"]:hover,
+#stcj-root.stcj-theme-light .stcj-btn[data-action="swipePreview"]:hover { color: #075985; background: rgba(2, 132, 199, 0.12); }
+#stcj-root.stcj-theme-light .stcj-btn[data-action="toggleOutline"].stcj-active {
+  color: #075985;
+  background: rgba(2, 132, 199, 0.16);
+  border-color: rgba(2, 132, 199, 0.38);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-favorites-manager { color: #b45309; }
+#stcj-root.stcj-theme-light .stcj-btn.stcj-favorites-manager:hover { color: #92400e; background: rgba(217, 119, 6, 0.14); }
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-pin.stcj-pin-active {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
+  border-color: rgba(220, 38, 38, 0.36);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-pin[data-count]:not([data-count="0"])::after,
+#stcj-root.stcj-theme-light .stcj-btn.stcj-favorites-manager[data-count]:not([data-count="0"])::after {
+  border-color: #f8fafc;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.16);
+}
+
+/* 区间指示 */
+#stcj-root.stcj-theme-light .stcj-range-chip {
+  color: #4c1d95;
+  background: rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.3);
+}
+
+#stcj-root.stcj-theme-light .stcj-range-chip-main:hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-range-nav {
+  color: inherit;
+  background: rgba(15, 23, 42, 0.06);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-range-nav:hover {
+  background: rgba(15, 23, 42, 0.12);
+}
+
+#stcj-root.stcj-theme-light .stcj-btn.stcj-range-reset-text {
+  background: rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.3);
+}
+
+/* 禁用态放在强调色之后，保证优先 */
+#stcj-root.stcj-theme-light .stcj-btn.stcj-disabled,
+#stcj-root.stcj-theme-light .stcj-btn.stcj-disabled:hover,
+#stcj-root.stcj-theme-light .stcj-btn.stcj-disabled:active {
+  color: rgba(15, 23, 42, 0.35);
+  background: rgba(15, 23, 42, 0.03);
+  border-color: rgba(15, 23, 42, 0.05);
+  box-shadow: none;
+}
+
+/* 最近收藏面板（位于 #stcj-root 内） */
+#stcj-root.stcj-theme-light .stcj-fav-panel {
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+#stcj-root.stcj-theme-light .stcj-fav-header { border-bottom-color: rgba(15, 23, 42, 0.08); }
+#stcj-root.stcj-theme-light .stcj-fav-title { color: #0f172a; }
+#stcj-root.stcj-theme-light .stcj-fav-close { color: rgba(15, 23, 42, 0.5); }
+#stcj-root.stcj-theme-light .stcj-fav-close:hover { color: #0f172a; background: rgba(15, 23, 42, 0.07); }
+#stcj-root.stcj-theme-light .stcj-fav-hint { color: rgba(15, 23, 42, 0.55); }
+
+#stcj-root.stcj-theme-light .stcj-fav-item { background: rgba(15, 23, 42, 0.04); }
+#stcj-root.stcj-theme-light .stcj-fav-item:hover { background: rgba(15, 23, 42, 0.08); border-color: rgba(15, 23, 42, 0.08); }
+#stcj-root.stcj-theme-light .stcj-fav-floor { color: #1e293b; }
+#stcj-root.stcj-theme-light .stcj-fav-note { color: rgba(15, 23, 42, 0.62); }
+#stcj-root.stcj-theme-light .stcj-fav-status { color: #c2410c; }
+#stcj-root.stcj-theme-light .stcj-fav-remove { color: rgba(15, 23, 42, 0.4); }
+#stcj-root.stcj-theme-light .stcj-fav-remove:hover { color: #dc2626; background: rgba(220, 38, 38, 0.12); }
+
+#stcj-root.stcj-theme-light .stcj-swipe-badge {
+  color: #0369a1;
+  background: rgba(2, 132, 199, 0.1);
+  border-color: rgba(2, 132, 199, 0.28);
+}
+
+#stcj-root.stcj-theme-light .stcj-fav-menu-btn { color: rgba(15, 23, 42, 0.55); background: rgba(15, 23, 42, 0.05); }
+#stcj-root.stcj-theme-light .stcj-fav-menu-btn:hover { color: #0f172a; background: rgba(15, 23, 42, 0.1); }
+#stcj-root.stcj-theme-light .stcj-fav-more { color: #334155; background: rgba(15, 23, 42, 0.05); }
+#stcj-root.stcj-theme-light .stcj-fav-more:hover { color: #0f172a; background: rgba(15, 23, 42, 0.1); }
+
+#stcj-root.stcj-theme-light .stcj-fav-resize {
+  background: linear-gradient(135deg, transparent 0 50%, rgba(15, 23, 42, 0.45) 50% 60%, transparent 60% 70%, rgba(15, 23, 42, 0.45) 70% 80%, transparent 80% 90%, rgba(15, 23, 42, 0.45) 90% 100%);
+}
+
+#stcj-root.stcj-theme-light .stcj-fav-menu,
+#stcj-fav-quick-menu-overlay.stcj-theme-light {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+#stcj-root.stcj-theme-light .stcj-fav-menu-item,
+#stcj-fav-quick-menu-overlay.stcj-theme-light .stcj-fav-menu-item { color: #1e293b; }
+#stcj-root.stcj-theme-light .stcj-fav-menu-item:hover,
+#stcj-fav-quick-menu-overlay.stcj-theme-light .stcj-fav-menu-item:hover { color: #0f172a; background: rgba(15, 23, 42, 0.06); }
+#stcj-root.stcj-theme-light .stcj-fav-menu-item.danger:hover,
+#stcj-fav-quick-menu-overlay.stcj-theme-light .stcj-fav-menu-item.danger:hover { color: #dc2626; background: rgba(220, 38, 38, 0.1); }
+
+/* ========== 日间模式：楼层大纲 + 气泡预览 ========== */
+#stcj-outline.stcj-outline.stcj-theme-light {
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+#stcj-outline.stcj-theme-light .stcj-outline-title { color: #0369a1; }
+#stcj-outline.stcj-theme-light .stcj-outline-title > span { color: #0f172a; }
+
+#stcj-outline.stcj-theme-light .stcj-outline-icon-btn:hover,
+#stcj-outline-preview.stcj-theme-light .stcj-outline-icon-btn:hover { background: rgba(15, 23, 42, 0.07); }
+
+#stcj-outline.stcj-theme-light .stcj-outline-search {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+#stcj-outline.stcj-theme-light .stcj-outline-search:focus-within,
+#stcj-outline.stcj-theme-light .stcj-outline-page-jump input:focus,
+#stcj-outline.stcj-theme-light .stcj-outline-page-size:focus { border-color: rgba(2, 132, 199, 0.5); }
+
+#stcj-outline.stcj-theme-light .stcj-outline-pager { border-top-color: rgba(15, 23, 42, 0.08); }
+
+#stcj-outline.stcj-theme-light .stcj-outline-page-jump input,
+#stcj-outline.stcj-theme-light .stcj-outline-page-size {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+#stcj-outline.stcj-theme-light .stcj-outline-page-size option { color: #1e293b; background: #fff; }
+
+#stcj-outline.stcj-theme-light .stcj-outline-row:hover,
+#stcj-outline.stcj-theme-light .stcj-outline-row.is-previewing { background: rgba(15, 23, 42, 0.05); }
+#stcj-outline.stcj-theme-light .stcj-outline-row.is-current { background: rgba(2, 132, 199, 0.1); }
+#stcj-outline.stcj-theme-light .stcj-outline-row.is-current::before { background: #0284c7; }
+#stcj-outline.stcj-theme-light .stcj-outline-row.is-current .stcj-outline-floor { color: #0369a1; }
+
+#stcj-outline.stcj-theme-light .stcj-outline-who { color: #431407; background: #fdba74; }
+#stcj-outline.stcj-theme-light .stcj-outline-row.is-user .stcj-outline-who { color: #052e16; background: #86efac; }
+
+#stcj-outline.stcj-theme-light .stcj-outline-peek:hover,
+#stcj-outline.stcj-theme-light .stcj-outline-row.is-previewing .stcj-outline-peek { color: #0369a1; background: rgba(2, 132, 199, 0.1); }
+
+#stcj-outline.stcj-theme-light .stcj-outline-resize {
+  background: linear-gradient(135deg, transparent 0 50%, rgba(15, 23, 42, 0.45) 50% 60%, transparent 60% 70%, rgba(15, 23, 42, 0.45) 70% 80%, transparent 80% 90%, rgba(15, 23, 42, 0.45) 90% 100%);
+}
+
+/* 预览气泡沿用宿主消息样式：在浅色底下改写宿主主题色变量以保证对比度 */
+#stcj-outline-preview.stcj-outline-preview.stcj-theme-light {
+  --SmartThemeBodyColor: #1e293b;
+  --SmartThemeEmColor: #64748b;
+  --SmartThemeQuoteColor: #b45309;
+  --SmartThemeUnderlineColor: #15803d;
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+}
+
+#stcj-outline-preview.stcj-theme-light.is-pinned { border-color: rgba(2, 132, 199, 0.45); }
+#stcj-outline-preview.stcj-theme-light .stcj-outline-preview-header { border-bottom-color: rgba(15, 23, 42, 0.08); }
+
+#stcj-outline-preview.stcj-theme-light .stcj-outline-bubble {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+#stcj-outline-preview.stcj-theme-light .stcj-outline-bubble.is-user { background: rgba(22, 163, 74, 0.08); }
+#stcj-outline-preview.stcj-theme-light .stcj-outline-bubble.is-focus {
+  border-color: rgba(2, 132, 199, 0.55);
+  box-shadow: 0 0 0 1px rgba(2, 132, 199, 0.15);
+}
+#stcj-outline-preview.stcj-theme-light .stcj-outline-bubble:hover { background: rgba(2, 132, 199, 0.08); }
+#stcj-outline-preview.stcj-theme-light .stcj-outline-bubble-body { color: #1e293b; }

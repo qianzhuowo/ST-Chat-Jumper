@@ -19,6 +19,7 @@ export const requiredServices = [
   "getCurrentChatId",
   "getRootScalePercent",
   "getRootScaleSliderProgress",
+  "getToolbarTheme",
   "handleAction",
   "installCleanup",
   "installRadialGestures",
@@ -32,10 +33,12 @@ export const requiredServices = [
   "refreshFavoritesFromMetadata",
   "saveGlobalHidden",
   "saveSettings",
+  "saveToolbarTheme",
   "setIcon",
   "shouldSuppressButtonAction",
   "startChatWatch",
   "suppressButtonActions",
+  "syncToolbarEntry",
   "toastInfo",
   "triggerHapticFeedback",
   "updateFavoritesUI",
@@ -325,8 +328,10 @@ export function createFeature({ state, dependencies }) {
     const root = document.getElementById(constants.ROOT_ID);
     if (root) {
       root.classList.toggle('stcj-global-hidden', state.layout.globalHidden);
+    dependencies.syncToolbarEntry();
       if (!state.layout.globalHidden) applyRootScale(root);
     }
+    dependencies.syncToolbarEntry();
 
     // 更新设置面板中的按钮文本
     const btn = document.getElementById('stcj-global-hide-btn');
@@ -338,8 +343,18 @@ export function createFeature({ state, dependencies }) {
     }
 
     if (state.layout.globalHidden) {
-      dependencies.toastInfo('ST Chat Jumper 悬浮条已隐藏，可在扩展设置中恢复');
+      dependencies.toastInfo('ST Chat Jumper 悬浮条已隐藏，可在扩展设置或便捷按钮中恢复');
     }
+  }
+
+  // The theme class also covers the recent-favorites panel, which lives inside the root.
+  function applyToolbarTheme(root = document.getElementById(constants.ROOT_ID)) {
+    root?.classList.toggle('stcj-theme-light', dependencies.getToolbarTheme() === 'light');
+  }
+
+  function setToolbarTheme(theme) {
+    dependencies.saveToolbarTheme(theme);
+    applyToolbarTheme();
   }
 
   function attachDrag(root) {
@@ -532,6 +547,7 @@ export function createFeature({ state, dependencies }) {
       <div class="stcj-btn" data-action="quickDelete" title="快速删除：选中某楼文字则删除该楼；无选中则删除最新楼层">${actionIconSvg('quickDelete')}</div>
       <div class="stcj-btn stcj-floor-indicator" data-action="currentFloor" title="当前楼层"><span class="stcj-floor-mark" aria-hidden="true">#</span><span class="stcj-floor-value">—</span></div>
       <div class="stcj-btn" data-action="toggleOutline" title="楼层大纲：按楼层浏览、跳转与原地预览">${actionIconSvg('toggleOutline')}</div>
+      <div class="stcj-btn" data-action="swipePreview" title="分支预览：选中某楼文字则打开该楼的 Swipe 预览；无选中则打开当前楼层">${actionIconSvg('swipePreview')}</div>
 
       <div class="stcj-pin-group">
         <div class="stcj-btn stcj-pin" data-action="togglePin" title="收藏楼层：点选收藏">${actionIconSvg('togglePin')}</div>
@@ -562,6 +578,7 @@ export function createFeature({ state, dependencies }) {
     root.classList.toggle('stcj-horizontal', state.layout.settings.orientation === 'horizontal');
     root.classList.toggle('stcj-vertical', state.layout.settings.orientation === 'vertical');
     root.classList.toggle('stcj-collapsed', !!state.layout.settings.collapsed);
+    applyToolbarTheme(root);
     updateOrientationToggleButton(root);
     updateCollapseToggleButton(root);
     updatePrevNextButtons(root);
@@ -631,5 +648,5 @@ export function createFeature({ state, dependencies }) {
     dependencies.log('UI 已注入');
   }
 
-  return { updateOrientationToggleButton, updateCollapseToggleButton, updatePrevNextButtons, updateFavPanelToggleButton, updateOutlineToggleButton, syncFloorIndicator, getRootMaxOffsets, persistRootPosition, setRootPositionOnly, clampRootIntoViewport, applyRootPositionFromSettings, scheduleRepositionOnResize, syncScaleControls, applyRootScale, setRootScale, setOrientation, toggleOrientation, setCollapsed, toggleCollapse, toggleGlobalHide, attachDrag, bindButtons, buildUI };
+  return { updateOrientationToggleButton, updateCollapseToggleButton, updatePrevNextButtons, updateFavPanelToggleButton, updateOutlineToggleButton, syncFloorIndicator, getRootMaxOffsets, persistRootPosition, setRootPositionOnly, clampRootIntoViewport, applyRootPositionFromSettings, scheduleRepositionOnResize, syncScaleControls, applyRootScale, setRootScale, setOrientation, toggleOrientation, setCollapsed, toggleCollapse, toggleGlobalHide, applyToolbarTheme, setToolbarTheme, attachDrag, bindButtons, buildUI };
 }

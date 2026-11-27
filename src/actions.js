@@ -8,6 +8,7 @@ export const requiredServices = [
   "handleQuickEditAction",
   "jumpToMessage",
   "openFavoritesManager",
+  "openSwipePreviewer",
   "quickFlipLatestMessagePage",
   "requestNativeMessageDelete",
   "restoreDefaultRangeView",
@@ -96,6 +97,11 @@ export function createFeature({ state, dependencies }) {
       // 楼层大纲面板
       case 'toggleOutline':
         dependencies.toggleOutline();
+        return;
+
+      // Swipe Previewer 联动：选中楼层或当前楼层的分支预览
+      case 'swipePreview':
+        dependencies.openSwipePreviewer();
         return;
 
       // ✏️ 快速编辑（选中内容可高亮定位）

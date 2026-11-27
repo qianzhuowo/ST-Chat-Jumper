@@ -42,9 +42,34 @@ export const DEFAULT_SETTINGS = {
     favPanelCustom: false,
     favPanelW: null,
     favPanelH: null,
-    // Floor outline side, per browser: 'left' | 'right'.
-    outlineSide: 'left',
+    // Floor outline panel, per browser: relative position in the free viewport space
+    // (null = default under the top bar on the left) and user-resized size (null = default).
+    outlineRx: null,
+    outlineRy: null,
+    outlineW: null,
+    outlineH: null,
   };
+
+export const OUTLINE_DEFAULT_W = 300;
+
+export const OUTLINE_MIN_W = 220;
+
+export const OUTLINE_MIN_H = 200;
+
+// Colour schemes of the floating toolbar and the floor outline; 'dark' is the original look.
+export const THEMES = ['dark', 'light'];
+
+export const DEFAULT_THEME = 'dark';
+
+// Where the quick hide/show-toolbar entry is inserted into the host UI.
+export const TOOLBAR_ENTRY_PLACEMENTS = [
+    ['leftSendForm', '发送栏左侧'],
+    ['rightSendForm', '发送栏右侧'],
+    ['qrButtons', 'Quick Reply 按钮栏'],
+    ['disabled', '不使用便捷按钮'],
+  ];
+
+export const DEFAULT_TOOLBAR_ENTRY_PLACEMENT = 'disabled';
 
 export const FAV_PANEL_MIN_W = 160;
 
@@ -74,6 +99,8 @@ export const CONFIGURABLE_BUTTONS = [
     { id: 'pinGroup',          label: '收藏 (📌)',          defaultEnabled: true, order: 14 },
     { id: 'currentFloor',      label: '当前楼层序号 (#)',   defaultEnabled: false, order: 15 },
     { id: 'toggleOutline',     label: '楼层大纲',           defaultEnabled: false, order: 16 },
+    // Needs the Swipe Previewer extension (see action-catalog `requires`).
+    { id: 'swipePreview',      label: '分支预览 (Swipe Previewer)', defaultEnabled: false, order: 17 },
   ];
 
 export const FAVORITES_METADATA_KEY = 'stcjFavorites';
@@ -134,6 +161,10 @@ export const ICONS = {
     hash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line></svg>',
     outline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="6" x2="20" y2="6"></line><line x1="9" y1="12" x2="20" y2="12"></line><line x1="9" y1="18" x2="16" y2="18"></line><circle cx="4.5" cy="6" r="1"></circle><circle cx="4.5" cy="12" r="1"></circle><circle cx="4.5" cy="18" r="1"></circle></svg>',
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+    sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>',
+    moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>',
+    crosshair: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"></circle><line x1="12" y1="1" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="23"></line><line x1="1" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="23" y2="12"></line><circle cx="12" cy="12" r="1.5" fill="currentColor"></circle></svg>',
+    layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
   };
 
@@ -164,4 +195,5 @@ export const BUTTON_DOM_MAP = {
     pinGroup:          '.stcj-pin-group',
     currentFloor:      '.stcj-btn[data-action="currentFloor"]',
     toggleOutline:     '.stcj-btn[data-action="toggleOutline"]',
+    swipePreview:      '.stcj-btn[data-action="swipePreview"]',
   };

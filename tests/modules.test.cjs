@@ -65,6 +65,31 @@ test('settings retain local storage format and default merging', () => {
     assert.equal(saved.favPanelCustom, false);
 });
 
+test('the floor outline left/right side migrates to its free position', () => {
+    const storage = environment();
+    storage.set('st_chat_jumper_settings_v1', JSON.stringify({ outlineSide: 'right', outlineW: 50, outlineH: 480.4 }));
+    const { settings } = createApplication(hostImports).state.layout;
+    assert.equal('outlineSide' in settings, false);
+    assert.equal(settings.outlineRx, 1);
+    assert.equal(settings.outlineRy, null);
+    assert.equal(settings.outlineW, 220);
+    assert.equal(settings.outlineH, 480);
+});
+
+test('theme and quick entry choices are validated against their option lists', () => {
+    environment();
+    const host = { extensionSettings: { 'ST-Chat-Jumper': { toolbarTheme: 'neon', toolbarEntryPlacement: 'qrButtons' } } };
+    window.SillyTavern = { getContext: () => host };
+    const app = createApplication(hostImports);
+    assert.equal(app.services.getToolbarTheme(), 'dark');
+    assert.equal(app.services.getOutlineTheme(), 'dark');
+    assert.equal(app.services.getToolbarEntryPlacement(), 'qrButtons');
+    app.services.saveOutlineTheme('light');
+    app.services.saveToolbarEntryPlacement('nowhere');
+    assert.equal(app.services.getOutlineTheme(), 'light');
+    assert.equal(app.services.getToolbarEntryPlacement(), 'qrButtons');
+});
+
 test('extension settings preserve stored button order, drop duplicates and merge new buttons', () => {
     environment();
     const host = { extensionSettings: { 'ST-Chat-Jumper': { buttons: [{ id: 'next', enabled: false, order: 0 }, { id: 'next' }, { id: 'removed' }] } } };

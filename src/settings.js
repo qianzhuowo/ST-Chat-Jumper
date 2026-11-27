@@ -200,6 +200,28 @@ export function createFeature({ state, dependencies }) {
     ctx.saveSettingsDebounced?.();
   }
 
+  // Small enumerated extension settings (per account): themes and the quick entry placement.
+  function readChoice(key, choices, fallback) {
+    const value = window.SillyTavern?.getContext?.()?.extensionSettings?.[constants.EXT_SETTINGS_KEY]?.[key];
+    return choices.includes(value) ? value : fallback;
+  }
+
+  function writeChoice(key, choices, value) {
+    const ctx = window.SillyTavern?.getContext?.();
+    if (!ctx?.extensionSettings || !choices.includes(value)) return;
+    ctx.extensionSettings[constants.EXT_SETTINGS_KEY] ??= {};
+    ctx.extensionSettings[constants.EXT_SETTINGS_KEY][key] = value;
+    ctx.saveSettingsDebounced?.();
+  }
+
+  const placementIds = constants.TOOLBAR_ENTRY_PLACEMENTS.map(([id]) => id);
+  function getToolbarTheme() { return readChoice('toolbarTheme', constants.THEMES, constants.DEFAULT_THEME); }
+  function saveToolbarTheme(theme) { writeChoice('toolbarTheme', constants.THEMES, theme); }
+  function getOutlineTheme() { return readChoice('outlineTheme', constants.THEMES, constants.DEFAULT_THEME); }
+  function saveOutlineTheme(theme) { writeChoice('outlineTheme', constants.THEMES, theme); }
+  function getToolbarEntryPlacement() { return readChoice('toolbarEntryPlacement', placementIds, constants.DEFAULT_TOOLBAR_ENTRY_PLACEMENT); }
+  function saveToolbarEntryPlacement(placement) { writeChoice('toolbarEntryPlacement', placementIds, placement); }
+
   function formatRangePagingModeLabel(mode = getRangePagingMode()) {
     return mode === 'shift' ? '平移' : '扩展';
   }
@@ -234,9 +256,14 @@ export function createFeature({ state, dependencies }) {
       const favPanelH = typeof parsed.favPanelH === 'number' && Number.isFinite(parsed.favPanelH)
         ? dependencies.clamp(parsed.favPanelH, constants.FAV_PANEL_MIN_H, constants.FAV_PANEL_MAX_H) : null;
 
+      const ratio = value => typeof value === 'number' && Number.isFinite(value) ? dependencies.clamp(value, 0, 1) : null;
+      const size = (value, min) => typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.round(value)) : null;
+      // `outlineSide` (left/right toggle) was replaced by a freely positioned panel.
+      const { outlineSide, ...stored } = parsed;
+
       return {
         ...constants.DEFAULT_SETTINGS,
-        ...parsed,
+        ...stored,
         x,
         y,
         rx,
@@ -251,7 +278,10 @@ export function createFeature({ state, dependencies }) {
         favPanelCustom,
         favPanelW,
         favPanelH,
-        outlineSide: parsed.outlineSide === 'right' ? 'right' : 'left',
+        outlineRx: ratio(parsed.outlineRx) ?? (outlineSide === 'right' ? 1 : null),
+        outlineRy: ratio(parsed.outlineRy),
+        outlineW: size(parsed.outlineW, constants.OUTLINE_MIN_W),
+        outlineH: size(parsed.outlineH, constants.OUTLINE_MIN_H),
       };
     } catch {
       return { ...constants.DEFAULT_SETTINGS };
@@ -313,5 +343,5 @@ export function createFeature({ state, dependencies }) {
     }
   }
 
-  return { getButtonSettings, getDefaultButtonSettings, saveButtonSettings, getRangeStep, saveRangeStep, getRangeContext, saveRangeContext, getRangePagingMode, saveRangePagingMode, loadFavoritesPreviewMode, saveFavoritesPreviewMode, getOutlinePageSize, saveOutlinePageSize, formatRangePagingModeLabel, isButtonEnabled, loadSettings, saveSettings, normalizeRootScale, getRootScalePercent, formatRootScalePercent, getRootScaleSliderProgress, loadGlobalHidden, saveGlobalHidden };
+  return { getButtonSettings, getDefaultButtonSettings, saveButtonSettings, getRangeStep, saveRangeStep, getRangeContext, saveRangeContext, getRangePagingMode, saveRangePagingMode, loadFavoritesPreviewMode, saveFavoritesPreviewMode, getOutlinePageSize, saveOutlinePageSize, getToolbarTheme, saveToolbarTheme, getOutlineTheme, saveOutlineTheme, getToolbarEntryPlacement, saveToolbarEntryPlacement, formatRangePagingModeLabel, isButtonEnabled, loadSettings, saveSettings, normalizeRootScale, getRootScalePercent, formatRootScalePercent, getRootScaleSliderProgress, loadGlobalHidden, saveGlobalHidden };
 }

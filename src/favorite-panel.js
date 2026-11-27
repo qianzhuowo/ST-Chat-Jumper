@@ -98,6 +98,8 @@ export function createFeature({ state, dependencies }) {
     const overlay = document.createElement('div');
     overlay.id = constants.FAVORITE_QUICK_MENU_OVERLAY_ID;
     overlay.className = 'stcj-fav-menu stcj-fav-menu-floating';
+    // The overlay lives in <body>; follow the toolbar's colour scheme explicitly.
+    overlay.classList.toggle('stcj-theme-light', !!document.getElementById(constants.ROOT_ID)?.classList.contains('stcj-theme-light'));
     overlay.style.visibility = 'hidden';
     overlay.innerHTML = `
       <button type="button" class="stcj-fav-menu-item" data-favorite-menu-action="note" data-favorite-id="${item.id}">${constants.ICONS.note}<span>备注</span></button>

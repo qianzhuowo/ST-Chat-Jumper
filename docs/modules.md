@@ -29,7 +29,9 @@ index.js → application.js → 功能工厂
 | `settings-ui.js` | 扩展设置面板、按钮布局与拖动排序 |
 | `host.js` | 宿主上下文/事件名兼容、弹窗、聊天滚动容器、swipe/editor/chat-jump API、宿主样式恢复 |
 | `navigation.js` | 视口锚点、楼层跳转、即时滚动、可见楼层观察器、快速翻页；`watchCurrentFloor` 是所有“当前楼层”实时展示的唯一订阅源 |
-| `outline.js` | 楼层大纲面板、筛选、分页（只构建当前页的行）、跳转与气泡组原地预览（复用收藏预览的格式化/净化管线） |
+| `outline.js` | 楼层大纲面板、筛选、分页（只构建当前页的行）、跳转与气泡组原地预览（复用收藏预览的格式化/净化管线）、面板拖动/缩放与日间/夜间主题 |
+| `toolbar-entry.js` | 快捷隐藏/显示悬浮条的便捷入口：按设置插入发送栏左/右侧或 Quick Reply 按钮栏，宿主重绘后重新插入；执行与设置按钮相同的 `toggleGlobalHide` |
+| `swipe-previewer.js` | Swipe Previewer 扩展联动：检测其消息按钮是否存在，按“选中楼层 → 当前楼层”的同一规则点击对应楼层的原生按钮 |
 | `range.js` | 楼层/区间解析、区间事务、前后翻段、恢复默认视图；守护 tt managed DOM 所有权 |
 | `message-content.js` | 消息文本、swipe 分支和当前快照读取 |
 | `selection.js` | 选中文字提取、归一化、编辑框文本匹配/偏移映射 |
@@ -56,7 +58,7 @@ index.js → application.js → 功能工厂
 | `editing` | editing 管理编辑快照、镜像和忙标记 |
 | `range` | range 管理激活区间、事务忙标记与操作序号 |
 | `navigation` | navigation 管理可见消息集合、DOM/可见性观察器与当前楼层订阅（最后一个订阅者退订时卸载滚动/DOM 监听） |
-| `outline` | outline 管理面板 DOM、筛选词与匹配楼层、当前页、预览与其定时器/序号（每页条数存在扩展设置 `outlinePageSize`；左/右侧是浏览器布局设置 `layout.settings.outlineSide`，面板位置按 `visualViewport` 计算） |
+| `outline` | outline 管理面板 DOM、筛选词与匹配楼层、当前页、预览与其定时器/序号（每页条数与主题存在扩展设置 `outlinePageSize` / `outlineTheme`；面板位置与尺寸是浏览器布局设置 `layout.settings.outlineRx/outlineRy/outlineW/outlineH`，位置按空余空间的比例保存并按 `visualViewport` 计算；旧的 `outlineSide: 'right'` 迁移为 `outlineRx: 1`） |
 | `host` | host 管理宿主样式写入/闪烁抑制；favorite-store 管理聊天内容索引，聊天切换时使其失效 |
 | `lifecycle` | lifecycle/chat-lifecycle 管理实例、监听卸载函数、聊天引用与轮询；settings-ui 提供设置挂载 observer |
 
@@ -67,7 +69,7 @@ index.js → application.js → 功能工厂
 ## 保持的兼容契约
 
 - localStorage：`st_chat_jumper_settings_v1`；extensionSettings：`ST-Chat-Jumper`；chatMetadata：`stcjFavorites`，记录字段不变。
-- DOM、CSS class、按钮 action、iframe 协议 `stcj-favorites-preview-v1` 保持原样；`style.css` 未改。
+- DOM、CSS class、按钮 action、iframe 协议 `stcj-favorites-preview-v1` 保持原样。日间模式只在 `.stcj-theme-light` 下覆盖配色（悬浮条主题存扩展设置 `toolbarTheme`，便捷入口位置存 `toolbarEntryPlacement`）。
 - `window.__ST_CHAT_JUMPER_INSTANCE__` 与 `window.stcjCleanup` 保留；新实例先销毁旧实例；销毁幂等。
 - tt managed 虚拟列表只委托单楼导航，绝不由插件重绘区间；静态聊天继续使用宿主 `addOneMessage`。
 - Popup 数值返回、取消/空备注、异步保存失败、切换聊天保护与宿主 CSS 恢复语义保留。
@@ -102,7 +104,7 @@ node --test tests/compatibility.test.cjs tests/instant-navigation.test.cjs tests
 
 动作目录条目可声明 `live: 'floor'`：悬浮条按钮与轮盘格子都以实时楼层徽章代替图标。悬浮条通过 `watchCurrentFloor` 订阅（仅在按钮启用时），轮盘在打开时读取一次 `getCurrentFloor()` 并以 `liveValues` 传给 `createRadialView`；设置预览未传值时显示示例数字。
 
-动作 provider 仅经 `registerShortcutAction` 注册，轮盘调用分发服务，不依赖可见悬浮条按钮。[完整契约与参数说明](radial-menu.md)。
+动作 provider 仅经 `registerShortcutAction` 注册，轮盘调用分发服务，不依赖可见悬浮条按钮。目录条目可声明 `requires`（如 `swipePreview` 需要 Swipe Previewer）：`isShortcutActionAvailable` 是唯一可用性判定，轮盘动作选择器与悬浮条按钮设置只在扩展可用时提供该动作。[完整契约与参数说明](radial-menu.md)。
 
 
 ### v2 可视化设置与渲染边界

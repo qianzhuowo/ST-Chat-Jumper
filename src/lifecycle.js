@@ -6,6 +6,7 @@ export const requiredServices = [
   "destroyRadial",
   "destroyRadialSettings",
   "destroyOutline",
+  "destroyToolbarEntry",
   "closeSettingsWindow",
   "clearQuickEditState",
   "closeFavoritesManager",
@@ -82,6 +83,7 @@ export function createFeature({ state, dependencies }) {
       dependencies.closeSettingsWindow();
       try {
         dependencies.destroyOutline();
+        dependencies.destroyToolbarEntry();
         dependencies.stopCurrentFloorWatch();
         state.layout.detachFloorIndicator = null;
       } catch {

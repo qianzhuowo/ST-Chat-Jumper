@@ -1,4 +1,5 @@
 import * as constants from './constants.js';
+import { findCatalogAction } from './action-catalog.js';
 
 // Explicit cross-feature service contract; linked once by application.js.
 export const requiredServices = [
@@ -11,18 +12,28 @@ export const requiredServices = [
   "getRangePagingMode",
   "getRangeStep",
   "getRootScalePercent",
+  "getToolbarEntryPlacement",
+  "getToolbarTheme",
+  "isShortcutActionAvailable",
   "log",
   "saveButtonSettings",
   "saveRangeContext",
   "saveRangePagingMode",
   "saveRangeStep",
   "setRootScale",
+  "setToolbarEntryPlacement",
+  "setToolbarTheme",
   "syncScaleControls",
   "syncFloorIndicator",
   "toggleGlobalHide"
 ];
 
 export function createFeature({ state, dependencies }) {
+  // A button whose action drives another extension can only be enabled while it is available.
+  function isButtonAvailable(btnId) {
+    return !findCatalogAction(btnId)?.requires || dependencies.isShortcutActionAvailable({ type: 'plugin', id: btnId });
+  }
+
   function refreshButtonLayout() {
     const root = document.getElementById(constants.ROOT_ID);
     if (!root) return;
@@ -174,6 +185,21 @@ export function createFeature({ state, dependencies }) {
                 一键隐藏悬浮条
               </button>
             </div>
+            <div class="stcj-config-card stcj-settings-toolbar-look">
+              <label class="stcj-setting-row">
+                <span class="stcj-setting-copy"><span>悬浮条主题</span><small>夜间为原有深色样式，日间为浅色样式；同时作用于最近收藏面板。</small></span>
+                <span class="stcj-setting-control"><select id="stcj-toolbar-theme" aria-label="悬浮条主题">
+                  <option value="dark">🌙 夜间模式</option>
+                  <option value="light">☀️ 日间模式</option>
+                </select></span>
+              </label>
+              <label class="stcj-setting-row">
+                <span class="stcj-setting-copy"><span>便捷入口位置</span><small>快捷隐藏/显示悬浮条的按钮，作用与“一键隐藏悬浮条”相同。</small></span>
+                <span class="stcj-setting-control"><select id="stcj-toolbar-entry-placement" aria-label="便捷入口位置">
+                  ${constants.TOOLBAR_ENTRY_PLACEMENTS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}
+                </select></span>
+              </label>
+            </div>
             <div class="stcj-settings-size">
               <div class="stcj-settings-size-header">
                 <div class="stcj-settings-size-copy">
@@ -269,6 +295,13 @@ export function createFeature({ state, dependencies }) {
       }
     }
 
+    const toolbarThemeSelect = document.getElementById('stcj-toolbar-theme');
+    toolbarThemeSelect.value = dependencies.getToolbarTheme();
+    toolbarThemeSelect.addEventListener('change', () => dependencies.setToolbarTheme(toolbarThemeSelect.value));
+    const entryPlacementSelect = document.getElementById('stcj-toolbar-entry-placement');
+    entryPlacementSelect.value = dependencies.getToolbarEntryPlacement();
+    entryPlacementSelect.addEventListener('change', () => dependencies.setToolbarEntryPlacement(entryPlacementSelect.value));
+
     const sizeSlider = document.getElementById('stcj-size-slider');
     if (sizeSlider) {
       sizeSlider.addEventListener('input', (e) => {
@@ -320,7 +353,11 @@ export function createFeature({ state, dependencies }) {
   function openSettingsWindow() {
     dependencies.cancelRadial();
     const dialog = document.getElementById('stcj-settings-window');
-    if (dialog && !dialog.open) dialog.showModal();
+    if (dialog && !dialog.open) {
+      // Extension-dependent buttons: availability may change after the dialog was mounted.
+      renderSettingsButtonList();
+      dialog.showModal();
+    }
   }
 
   function closeSettingsWindow() { document.getElementById('stcj-settings-window')?.close(); }
@@ -336,9 +373,10 @@ export function createFeature({ state, dependencies }) {
 
     for (const cfg of sorted) {
       const label = getButtonLabel(cfg.id);
+      const available = isButtonAvailable(cfg.id);
 
       const item = document.createElement('div');
-      item.className = 'stcj-settings-item';
+      item.className = `stcj-settings-item${available ? '' : ' is-unavailable'}`;
       item.draggable = true;
       item.dataset.btnId = cfg.id;
 
@@ -346,9 +384,9 @@ export function createFeature({ state, dependencies }) {
         <span class="stcj-settings-drag" title="拖拽排序">
           <i class="fa-solid fa-grip-vertical"></i>
         </span>
-        <label class="stcj-settings-label">
-          <input type="checkbox" class="stcj-settings-check" data-btn-id="${cfg.id}" ${cfg.enabled ? 'checked' : ''} />
-          <span>${label}</span>
+        <label class="stcj-settings-label"${available ? '' : ' title="需要安装并启用对应扩展后才能启用"'}>
+          <input type="checkbox" class="stcj-settings-check" data-btn-id="${cfg.id}" ${cfg.enabled ? 'checked' : ''} ${available ? '' : 'disabled'} />
+          <span>${label}${available ? '' : '<small>（未检测到已启用的扩展）</small>'}</span>
         </label>
         <button type="button" class="stcj-settings-move-up" aria-label="上移${label}">↑</button>
         <button type="button" class="stcj-settings-move-down" aria-label="下移${label}">↓</button>
